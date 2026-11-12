@@ -1,0 +1,6 @@
+{
+  "name": "پاسخبرگ | سامانه هوشمند آزمون و تحلیل عملکرد",
+  "description": "پاسخبرگ آنلاین حرفه‌ای با استخراج هوشمند پاسخنامه، برش خودکار سوالات از PDF با بینایی ماشین و تحلیل جامع درصد و پیشرفت درسی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

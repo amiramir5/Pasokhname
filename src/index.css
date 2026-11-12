@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-body: 'Vazirmatn FD', 'Vazirmatn', system-ui, -apple-system, sans-serif;
+    --font-display: 'Lalezar', 'Vazirmatn FD', 'Vazirmatn', sans-serif;
+  }
+
+  html {
+    direction: rtl;
+    font-family: var(--font-body);
+    font-feature-settings: "ss01" 1, "tnum" 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background-color: #F6F7FB;
+    color: #1E293B;
+    overflow-x: hidden;
+  }
+}
+
+.font-display-farsi {
+  font-family: var(--font-display);
+  letter-spacing: 0;
+}
+
+.font-kalameh-style {
+  font-family: 'Vazirmatn FD', 'Vazirmatn', sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+.tabular-farsi {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "ss01" 1, "tnum" 1;
+}
+
+/* Custom subtle scrollbars for the answer sheet */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F2F9;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb {
+  background: #D5D0F5;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6338F9;
+}
