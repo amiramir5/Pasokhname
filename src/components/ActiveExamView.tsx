@@ -25,6 +25,7 @@ import {
   formatFarsiTimer,
   getOptionLabel,
 } from '../utils/farsi';
+import { saveSingleQuestionImageToIDB } from '../utils/imageStorage';
 
 interface ActiveExamViewProps {
   exam: ExamSession;
@@ -53,6 +54,9 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
   examRef.current = exam;
 
   const currentQuestion = exam.questions[currentIndex] || exam.questions[0];
+  if (!currentQuestion) {
+    return null;
+  }
   const totalSecondsAllowed = exam.durationMinutes * 60;
   const remainingSeconds = Math.max(0, totalSecondsAllowed - exam.elapsedSeconds);
 
@@ -190,6 +194,10 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
+      const targetQ = exam.questions[currentIndex];
+      if (targetQ) {
+        void saveSingleQuestionImageToIDB(exam.id, targetQ.questionNumber, dataUrl);
+      }
       const updatedQuestions = exam.questions.map((q, idx) =>
         idx === currentIndex ? { ...q, croppedImageUrl: dataUrl } : q
       );

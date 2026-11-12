@@ -71,6 +71,12 @@ export interface SavedAnswerKeyTemplate {
   explanations?: Record<number, string>;
 }
 
+export type AIModelPreference =
+  | 'auto'
+  | 'gemini-3.6-flash'
+  | 'gemini-3.5-flash-lite'
+  | 'gemini-3.8-flash';
+
 export interface AppSettings {
   studentName: string;
   targetField: string;
@@ -78,6 +84,7 @@ export interface AppSettings {
   optionLabelStyle: 'numeric' | 'alphabetic'; // ۱ ۲ ۳ ۴ vs الف ب ج د
   defaultNegativeMarking: boolean;
   defaultShowScoreImmediately: boolean;
+  aiModelPreference?: AIModelPreference;
 }
 
 export interface BoundingBoxQuestion {

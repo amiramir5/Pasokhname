@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ExamSession,
   SavedAnswerKeyTemplate,
@@ -8,6 +8,12 @@ import {
   QuestionItemData,
 } from './types/exam';
 import { calculateExamScore } from './utils/scoring';
+import {
+  saveExamImagesToIDB,
+  loadExamImagesFromIDB,
+  deleteExamImagesFromIDB,
+  clearAllImagesFromIDB,
+} from './utils/imageStorage';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { CreateExamView } from './components/CreateExamView';
@@ -33,25 +39,22 @@ const DEFAULT_SETTINGS: AppSettings = {
   optionLabelStyle: 'numeric',
   defaultNegativeMarking: true,
   defaultShowScoreImmediately: true,
+  aiModelPreference: 'auto',
 };
 
 function safeSaveExamsToStorage(exams: ExamSession[]) {
   try {
-    localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
-  } catch {
-    // اگر حجم تصاویر برش‌خورده از ظرفیت ۵ مگابایت localStorage فراتر رفت، نسخه بدون تصویر سنگین را ذخیره می‌کنیم
-    try {
-      const stripped = exams.map((ex) => ({
-        ...ex,
-        questions: ex.questions.map((q) => ({
-          ...q,
-          croppedImageUrl: undefined,
-        })),
-      }));
-      localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(stripped));
-    } catch (innerErr) {
-      console.warn('Could not persist to localStorage:', innerErr);
-    }
+    // تصاویر برش‌خورده در IndexedDB نگهداری می‌شوند تا ظرفیت ۵ مگابایتی localStorage پر نشود
+    const stripped = exams.map((ex) => ({
+      ...ex,
+      questions: ex.questions.map((q) => ({
+        ...q,
+        croppedImageUrl: undefined,
+      })),
+    }));
+    localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(stripped));
+  } catch (err) {
+    console.warn('Could not persist to localStorage:', err);
   }
 }
 
@@ -97,9 +100,53 @@ export default function App() {
   const [runningExamId, setRunningExamId] = useState<string | null>(null);
   const [reportExamId, setReportExamId] = useState<string | null>(null);
 
+  const examsRef = useRef(exams);
+  examsRef.current = exams;
+
+  // ذخیره با تأخیر کنترل‌شده در localStorage برای جلوگیری از لگ تایمر ۱ ثانیه‌ای
   useEffect(() => {
-    safeSaveExamsToStorage(exams);
+    const timer = window.setTimeout(() => {
+      safeSaveExamsToStorage(exams);
+    }, 1200);
+    return () => window.clearTimeout(timer);
   }, [exams]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      safeSaveExamsToStorage(examsRef.current);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  // بازیابی تصاویر برش‌خورده از IndexedDB هنگام باز کردن آزمون یا کارنامه
+  const activeInspectExamId = runningExamId || reportExamId;
+  useEffect(() => {
+    if (!activeInspectExamId) return;
+    let cancelled = false;
+    loadExamImagesFromIDB(activeInspectExamId).then((imagesMap) => {
+      if (cancelled || Object.keys(imagesMap).length === 0) return;
+      setExams((prev) =>
+        prev.map((ex) => {
+          if (ex.id !== activeInspectExamId) return ex;
+          const needsHydrate = ex.questions.some(
+            (q) => !q.croppedImageUrl && imagesMap[q.questionNumber]
+          );
+          if (!needsHydrate) return ex;
+          return {
+            ...ex,
+            questions: ex.questions.map((q) => ({
+              ...q,
+              croppedImageUrl: q.croppedImageUrl || imagesMap[q.questionNumber],
+            })),
+          };
+        })
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeInspectExamId]);
 
   useEffect(() => {
     try {
@@ -176,6 +223,7 @@ export default function App() {
       questions,
     };
 
+    void saveExamImagesToIDB(newExam.id, config.croppedImagesByQuestion);
     setExams((prev) => [newExam, ...prev]);
     setRunningExamId(newExam.id);
     setReportExamId(null);
@@ -202,6 +250,7 @@ export default function App() {
   }, []);
 
   const handleDeleteExam = (examId: string) => {
+    void deleteExamImagesFromIDB(examId);
     setExams((prev) => prev.filter((e) => e.id !== examId));
     if (runningExamId === examId) setRunningExamId(null);
     if (reportExamId === examId) setReportExamId(null);
@@ -341,6 +390,7 @@ export default function App() {
             settings={settings}
             onUpdateSettings={setSettings}
             onClearAllExams={() => {
+              void clearAllImagesFromIDB();
               setExams([]);
               setRunningExamId(null);
               setReportExamId(null);

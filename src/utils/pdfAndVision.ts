@@ -1,7 +1,151 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { BoundingBoxQuestion, OptionChoice } from '../types/exam';
+import { AIModelPreference, BoundingBoxQuestion, OptionChoice } from '../types/exam';
 import { toFarsiDigits } from './farsi';
+
+const API_KEY_STORAGE_KEY = 'pasokhbarg_gemini_api_key';
+
+export function getStoredGeminiApiKey(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return (localStorage.getItem(API_KEY_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function setStoredGeminiApiKey(key: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed = key.trim();
+    if (trimmed) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getStoredAIModelPreference(): AIModelPreference {
+  if (typeof window === 'undefined') return 'auto';
+  try {
+    const raw = localStorage.getItem('pasokhbarg_settings_v1');
+    if (!raw) return 'auto';
+    const parsed = JSON.parse(raw);
+    return parsed.aiModelPreference || 'auto';
+  } catch {
+    return 'auto';
+  }
+}
+
+function buildAIHeaders(explicitKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const key = (explicitKey ?? getStoredGeminiApiKey()).trim();
+  if (key) {
+    headers['x-gemini-api-key'] = key;
+  }
+  return headers;
+}
+
+export async function fetchAIStatus(): Promise<{
+  hasServerKey: boolean;
+  hasBrowserKey: boolean;
+  defaultModel: string;
+}> {
+  const hasBrowserKey = Boolean(getStoredGeminiApiKey());
+  try {
+    const res = await fetch('/api/ai/status');
+    if (!res.ok) {
+      return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-3.6-flash' };
+    }
+    const data = await res.json();
+    return {
+      hasServerKey: Boolean(data.hasServerKey),
+      hasBrowserKey,
+      defaultModel: data.defaultModel || 'gemini-3.6-flash',
+    };
+  } catch {
+    return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-3.6-flash' };
+  }
+}
+
+export async function saveGeminiApiKey(
+  apiKey: string,
+  saveToServerEnv = true
+): Promise<{ savedToBrowser: boolean; savedToEnvFile: boolean; error?: string }> {
+  const cleanKey = apiKey.trim();
+  setStoredGeminiApiKey(cleanKey);
+
+  if (!cleanKey) {
+    return { savedToBrowser: true, savedToEnvFile: false };
+  }
+
+  if (!saveToServerEnv) {
+    return { savedToBrowser: true, savedToEnvFile: false };
+  }
+
+  try {
+    const res = await fetch('/api/ai/save-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: cleanKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        savedToBrowser: true,
+        savedToEnvFile: false,
+        error: data.error,
+      };
+    }
+    return {
+      savedToBrowser: true,
+      savedToEnvFile: Boolean(data.savedToEnvFile),
+    };
+  } catch {
+    return { savedToBrowser: true, savedToEnvFile: false };
+  }
+}
+
+export async function testGeminiConnection(
+  apiKey?: string,
+  model?: AIModelPreference
+): Promise<{
+  success: boolean;
+  model?: string;
+  latencyMs?: number;
+  reply?: string;
+  error?: string;
+}> {
+  const targetModel =
+    !model || model === 'auto' ? 'gemini-3.6-flash' : model;
+  try {
+    const res = await fetch('/api/ai/test-connection', {
+      method: 'POST',
+      headers: buildAIHeaders(apiKey),
+      body: JSON.stringify({
+        apiKey: apiKey?.trim() || undefined,
+        model: targetModel,
+      }),
+    });
+    const data = await res.json();
+    return {
+      success: Boolean(res.ok && data.success),
+      model: data.model || targetModel,
+      latencyMs: data.latencyMs,
+      reply: data.reply,
+      error: data.error,
+    };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      model: targetModel,
+      error: err instanceof Error ? err.message : 'خطا در برقراری ارتباط با سرور',
+    };
+  }
+}
 
 // پیکربندی Worker محلی برای اجرای بدون نیاز به اینترنت خارجی
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
@@ -131,8 +275,7 @@ export function cropImageFromBoundingBox(
 }
 
 /**
- * الگوریتم کمکی تحلیل تراکم پیکسل‌های افقی برای تشخیص خودکار باکس سوالات در صورت عدم دسترسی موقت به شبکه
- * یا برای صفحات استاندارد تک‌ستونی
+ * الگوریتم کمکی تحلیل تراکم پیکسل‌های افقی و تشخیص دوستونی برای مواقع قطع موقت ارتباط با هوش مصنوعی
  */
 export async function detectQuestionBandsVisualFallback(
   pageDataUrl: string,
@@ -155,69 +298,101 @@ export async function detectQuestionBandsVisualFallback(
       ctx.drawImage(img, 0, 0);
       const imgData = ctx.getImageData(0, 0, w, h).data;
 
-      // محاسبه میزان تیرگی هر سطر افقی
-      const rowInk = new Float32Array(h);
-      const marginX = Math.floor(w * 0.04);
-      for (let y = 0; y < h; y++) {
-        let darkPixels = 0;
-        for (let x = marginX; x < w - marginX; x += 2) {
-          const idx = (y * w + x) * 4;
-          const r = imgData[idx];
-          const g = imgData[idx + 1];
-          const b = imgData[idx + 2];
-          if (r < 220 || g < 220 || b < 220) {
-            darkPixels++;
-          }
-        }
-        rowInk[y] = darkPixels / ((w - 2 * marginX) / 2);
-      }
-
-      // گام ۱: تشخیص خطوط متنی/گرافیکی و ادغام خطوط متعلق به یک سوال (صورت سوال + گزینه‌ها)
-      const minGapBetweenQuestions = Math.max(22, Math.floor(h * 0.021));
-      const minQuestionHeight = Math.max(55, Math.floor(h * 0.075));
-      const inkThreshold = 0.004;
-
-      const rawBlocks: { startY: number; endY: number }[] = [];
-      let inBlock = false;
-      let blockStart = 0;
-      let blankRun = 0;
-
-      // شروع از زیر هدر صفحه (۹٪ بالای صفحه) تا ۹۸٪ پایین صفحه
-      const scanStartY = Math.floor(h * 0.09);
+      const scanStartY = Math.floor(h * 0.08);
       const scanEndY = Math.floor(h * 0.98);
 
-      for (let y = scanStartY; y < scanEndY; y++) {
-        if (rowInk[y] > inkThreshold) {
-          if (!inBlock) {
-            inBlock = true;
-            blockStart = y;
+      // بررسی دوستونی بودن صفحه با اندازه‌گیری تراکم جوهر در نوار میانی (۴۸٪ تا ۵۲٪ عرض)
+      let centerInkCount = 0;
+      let centerTotal = 0;
+      const midStart = Math.floor(w * 0.48);
+      const midEnd = Math.floor(w * 0.52);
+      for (let y = scanStartY; y < scanEndY; y += 3) {
+        for (let x = midStart; x < midEnd; x += 2) {
+          const idx = (y * w + x) * 4;
+          if (imgData[idx] < 215 || imgData[idx + 1] < 215 || imgData[idx + 2] < 215) {
+            centerInkCount++;
           }
-          blankRun = 0;
-        } else if (inBlock) {
-          blankRun++;
-          if (blankRun >= minGapBetweenQuestions) {
-            const blockEnd = y - blankRun;
-            if (blockEnd - blockStart >= minQuestionHeight) {
-              rawBlocks.push({ startY: blockStart, endY: blockEnd });
-            }
-            inBlock = false;
-            blankRun = 0;
-          }
+          centerTotal++;
         }
       }
-      if (inBlock && scanEndY - blockStart >= minQuestionHeight) {
-        rawBlocks.push({ startY: blockStart, endY: scanEndY });
-      }
+      const centerDensity = centerTotal > 0 ? centerInkCount / centerTotal : 1;
+      const isTwoColumn = centerDensity < 0.008;
 
-      const padY = Math.floor(h * 0.008);
+      const scanRegion = (xStartRatio: number, xEndRatio: number) => {
+        const startX = Math.floor(w * xStartRatio);
+        const endX = Math.floor(w * xEndRatio);
+        const spanW = Math.max(1, (endX - startX) / 2);
+        const rowInk = new Float32Array(h);
+
+        for (let y = scanStartY; y < scanEndY; y++) {
+          let darkPixels = 0;
+          for (let x = startX; x < endX; x += 2) {
+            const idx = (y * w + x) * 4;
+            if (imgData[idx] < 220 || imgData[idx + 1] < 220 || imgData[idx + 2] < 220) {
+              darkPixels++;
+            }
+          }
+          rowInk[y] = darkPixels / spanW;
+        }
+
+        const minGapBetweenQuestions = Math.max(12, Math.floor(h * 0.013));
+        const minQuestionHeight = Math.max(45, Math.floor(h * 0.055));
+        const inkThreshold = 0.004;
+
+        const blocks: { startY: number; endY: number; xmin: number; xmax: number }[] = [];
+        let inBlock = false;
+        let blockStart = 0;
+        let blankRun = 0;
+
+        for (let y = scanStartY; y < scanEndY; y++) {
+          if (rowInk[y] > inkThreshold) {
+            if (!inBlock) {
+              inBlock = true;
+              blockStart = y;
+            }
+            blankRun = 0;
+          } else if (inBlock) {
+            blankRun++;
+            if (blankRun >= minGapBetweenQuestions) {
+              const blockEnd = y - blankRun;
+              if (blockEnd - blockStart >= minQuestionHeight) {
+                blocks.push({
+                  startY: blockStart,
+                  endY: blockEnd,
+                  xmin: Math.round(xStartRatio * 1000),
+                  xmax: Math.round(xEndRatio * 1000),
+                });
+              }
+              inBlock = false;
+              blankRun = 0;
+            }
+          }
+        }
+        if (inBlock && scanEndY - blockStart >= minQuestionHeight) {
+          blocks.push({
+            startY: blockStart,
+            endY: scanEndY,
+            xmin: Math.round(xStartRatio * 1000),
+            xmax: Math.round(xEndRatio * 1000),
+          });
+        }
+        return blocks;
+      };
+
+      // در صفحات دوستونی RTL: ابتدا ستون راست (0.50..0.98) سپس ستون چپ (0.02..0.50)
+      const rawBlocks = isTwoColumn
+        ? [...scanRegion(0.5, 0.98), ...scanRegion(0.02, 0.5)]
+        : scanRegion(0.025, 0.975);
+
+      const padY = Math.floor(h * 0.006);
       const results: BoundingBoxQuestion[] = rawBlocks.map((b, idx) => ({
-        id: `p${pageIndex}-q${startingQuestionNumber + idx}`,
+        id: `p${pageIndex}-q${startingQuestionNumber + idx}-${idx}`,
         pageIndex,
         questionNumber: startingQuestionNumber + idx,
         ymin: Math.max(0, Math.round(((b.startY - padY) / h) * 1000)),
-        xmin: 25,
+        xmin: b.xmin,
         ymax: Math.min(1000, Math.round(((b.endY + padY) / h) * 1000)),
-        xmax: 975,
+        xmax: b.xmax,
       }));
 
       resolve(results);
@@ -233,17 +408,27 @@ export async function detectQuestionBandsVisualFallback(
 export async function detectQuestionsOnPageWithAI(
   page: RenderedPageImage,
   pageIndex: number,
-  startingQuestionNumber: number
-): Promise<{ boxes: BoundingBoxQuestion[]; usedFallback: boolean }> {
+  startingQuestionNumber: number,
+  modelOverride?: AIModelPreference
+): Promise<{
+  boxes: BoundingBoxQuestion[];
+  usedFallback: boolean;
+  errorReason?: string;
+  modelUsed?: string;
+  escalated?: boolean;
+}> {
+  let errorReason: string | undefined;
+
   try {
     const response = await fetch('/api/ai/detect-questions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildAIHeaders(),
       body: JSON.stringify({
         imageBase64: page.dataUrl,
         mimeType: 'image/jpeg',
         pageIndex,
         startingQuestionNumber,
+        model: modelOverride || getStoredAIModelPreference(),
       }),
     });
 
@@ -252,21 +437,36 @@ export async function detectQuestionsOnPageWithAI(
       const boxes: BoundingBoxQuestion[] = [];
       for (let i = 0; i < data.questions.length; i++) {
         const q = data.questions[i];
+        const ymin = Math.max(0, Math.min(990, Number(q.ymin) || 0));
+        const xmin = Math.max(0, Math.min(990, Number(q.xmin) || 20));
+        const ymax = Math.max(ymin + 15, Math.min(1000, Number(q.ymax) || 1000));
+        const xmax = Math.max(xmin + 20, Math.min(1000, Number(q.xmax) || 980));
         const box: BoundingBoxQuestion = {
           id: `p${pageIndex}-q${q.questionNumber || startingQuestionNumber + i}-${i}`,
           pageIndex,
-          questionNumber: q.questionNumber || startingQuestionNumber + i,
-          ymin: Math.max(0, Math.min(990, Number(q.ymin) || 0)),
-          xmin: Math.max(0, Math.min(990, Number(q.xmin) || 20)),
-          ymax: Math.max(10, Math.min(1000, Number(q.ymax) || 1000)),
-          xmax: Math.max(10, Math.min(1000, Number(q.xmax) || 980)),
+          questionNumber: Number(q.questionNumber) || startingQuestionNumber + i,
+          ymin,
+          xmin,
+          ymax,
+          xmax,
         };
         box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
         boxes.push(box);
       }
-      return { boxes, usedFallback: false };
+      return {
+        boxes,
+        usedFallback: false,
+        modelUsed: data.modelUsed,
+        escalated: Boolean(data.escalated),
+      };
     }
+
+    errorReason =
+      data?.error ||
+      'هوش مصنوعی نتوانست باکس سوالی را در این صفحه تشخیص دهد.';
   } catch (err) {
+    errorReason =
+      err instanceof Error ? err.message : 'خطا در ارتباط با سرور هوش مصنوعی';
     console.warn('AI question detection fallback triggered:', err);
   }
 
@@ -279,7 +479,7 @@ export async function detectQuestionsOnPageWithAI(
   for (const box of fallbackBoxes) {
     box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
   }
-  return { boxes: fallbackBoxes, usedFallback: true };
+  return { boxes: fallbackBoxes, usedFallback: true, errorReason };
 }
 
 /**
@@ -289,14 +489,18 @@ export async function extractAnswerKeyWithAI(params: {
   textInput?: string;
   imagesBase64?: { mimeType: string; data: string }[];
   expectedCount?: number;
+  model?: AIModelPreference;
 }): Promise<{
   answers: Record<number, OptionChoice>;
   explanations: Record<number, string>;
 }> {
   const response = await fetch('/api/ai/extract-answers', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    headers: buildAIHeaders(),
+    body: JSON.stringify({
+      ...params,
+      model: params.model || getStoredAIModelPreference(),
+    }),
   });
 
   const data = await response.json();

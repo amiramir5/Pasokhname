@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowRight,
   Sparkles,
@@ -12,6 +12,8 @@ import {
   Wand2,
   Save,
   FolderOpen,
+  KeyRound,
+  Wifi,
 } from 'lucide-react';
 import {
   DifficultyLevel,
@@ -34,6 +36,10 @@ import {
   cropImageFromBoundingBox,
   generateSampleTestSheetPage,
   RenderedPageImage,
+  fetchAIStatus,
+  saveGeminiApiKey,
+  testGeminiConnection,
+  getStoredGeminiApiKey,
 } from '../utils/pdfAndVision';
 
 interface CreateExamViewProps {
@@ -121,6 +127,54 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
     text: string;
   } | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+
+  // وضعیت کلید Gemini API برای نمایش راهنمای سریع در صورت نبود کلید
+  const [hasAnyAIKey, setHasAnyAIKey] = useState<boolean>(() => Boolean(getStoredGeminiApiKey()));
+  const [inlineApiKey, setInlineApiKey] = useState<string>('');
+  const [isTestingInlineKey, setIsTestingInlineKey] = useState<boolean>(false);
+  const [inlineKeyMsg, setInlineKeyMsg] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    fetchAIStatus().then((st) => {
+      setHasAnyAIKey(st.hasServerKey || st.hasBrowserKey);
+    });
+  }, []);
+
+  const handleQuickSaveAndTestKey = async () => {
+    const trimmed = inlineApiKey.trim();
+    if (!trimmed) {
+      setInlineKeyMsg({ type: 'error', text: 'لطفاً کلید Gemini API خود را وارد کنید.' });
+      return;
+    }
+    setIsTestingInlineKey(true);
+    setInlineKeyMsg(null);
+    try {
+      await saveGeminiApiKey(trimmed, true);
+      const testRes = await testGeminiConnection(trimmed);
+      if (testRes.success) {
+        setHasAnyAIKey(true);
+        setInlineKeyMsg({
+          type: 'success',
+          text: `متصل شد (${testRes.model} · ${toFarsiDigits(testRes.latencyMs ?? 0)} میلی‌ثانیه)`,
+        });
+      } else {
+        setInlineKeyMsg({
+          type: 'error',
+          text: testRes.error || 'کلید معتبر نیست یا اتصال برقرار نشد.',
+        });
+      }
+    } catch (err: unknown) {
+      setInlineKeyMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'خطا در تست اتصال کلید',
+      });
+    } finally {
+      setIsTestingInlineKey(false);
+    }
+  };
 
   const keyFileInputRef = useRef<HTMLInputElement>(null);
   const keyImageInputRef = useRef<HTMLInputElement>(null);
@@ -270,7 +324,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-          const pdfPages = await renderPdfFileToImages(f, 6, 1.8);
+          const pdfPages = await renderPdfFileToImages(f, 20, 1.8);
           allPages.push(...pdfPages);
         } else {
           const imgPage = await loadImageFileToRenderedPage(f, allPages.length + 1);
@@ -280,13 +334,34 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
 
       setRenderedPages(allPages);
       const allBoxes: BoundingBoxQuestion[] = [];
+      const usedNumbers = new Set<number>();
       let nextQNum = 1;
+      let fallbackPagesCount = 0;
+      let lastFallbackError: string | undefined;
+      let lastModelUsed: string | undefined;
+      let anyEscalated = false;
 
       for (let pIdx = 0; pIdx < allPages.length; pIdx++) {
-        const { boxes } = await detectQuestionsOnPageWithAI(allPages[pIdx], pIdx, nextQNum);
+        const { boxes, usedFallback, errorReason, modelUsed, escalated } =
+          await detectQuestionsOnPageWithAI(allPages[pIdx], pIdx, nextQNum);
+
+        if (usedFallback) {
+          fallbackPagesCount++;
+          if (errorReason) lastFallbackError = errorReason;
+        }
+        if (modelUsed) lastModelUsed = modelUsed;
+        if (escalated) anyEscalated = true;
+
         for (const b of boxes) {
-          b.questionNumber = nextQNum++;
-          allBoxes.push(b);
+          // حفظ شماره سوال واقعی تشخیص‌داده‌شده توسط AI در صورت معتبر و یکتا بودن
+          let assignedNum = b.questionNumber;
+          if (!assignedNum || assignedNum < 1 || usedNumbers.has(assignedNum)) {
+            while (usedNumbers.has(nextQNum)) nextQNum++;
+            assignedNum = nextQNum;
+          }
+          usedNumbers.add(assignedNum);
+          nextQNum = Math.max(nextQNum, assignedNum + 1);
+          allBoxes.push({ ...b, questionNumber: assignedNum });
         }
       }
 
@@ -294,14 +369,30 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
       if (allBoxes.length > 0) {
         setSelectedBoxId(allBoxes[0].id);
         setQuestionCountStr(toFarsiDigits(Math.max(questionCount, allBoxes.length)));
-        setSlicerStatus({
-          type: 'success',
-          text: `${toFarsiDigits(allBoxes.length)} سوال به صورت خودکار تشخیص داده شد و برش خورد! می‌توانید کادر هر سوال را بازبینی یا تنظیم کنید.`,
-        });
+        if (fallbackPagesCount > 0) {
+          setSlicerStatus({
+            type: 'error',
+            text: `هشدار: هوش مصنوعی در ${toFarsiDigits(
+              fallbackPagesCount
+            )} صفحه در دسترس نبود (${
+              lastFallbackError || 'کلید API تنظیم نشده'
+            }) و برش با الگوریتم ساده انجام شد. برای برش دقیق، کلید API را وارد کنید.`,
+          });
+        } else {
+          const modelNote = lastModelUsed
+            ? ` (مدل: ${lastModelUsed}${anyEscalated ? ' · ارتقای هوشمند فعال شد' : ''})`
+            : '';
+          setSlicerStatus({
+            type: 'success',
+            text: `${toFarsiDigits(allBoxes.length)} سوال به صورت خودکار تشخیص داده شد و برش خورد!${modelNote} می‌توانید کادر هر سوال را بازبینی یا تنظیم کنید.`,
+          });
+        }
       } else {
         setSlicerStatus({
           type: 'error',
-          text: 'سوالی به صورت خودکار تفکیک نشد. می‌توانید با دکمه «افزودن باکس برش» کادر سوال را مشخص کنید.',
+          text:
+            lastFallbackError ||
+            'سوالی به صورت خودکار تفکیک نشد. می‌توانید با دکمه «افزودن باکس برش» کادر سوال را مشخص کنید.',
         });
       }
     } catch (err: unknown) {
@@ -385,6 +476,13 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
     updatedBox.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, updatedBox);
 
     setDetectedBoxes((prev) => prev.map((b) => (b.id === boxId ? updatedBox : b)));
+  };
+
+  const handleUpdateBoxQuestionNumber = (boxId: string, qNum: number) => {
+    const safeNum = Math.max(1, Math.min(500, qNum));
+    setDetectedBoxes((prev) =>
+      prev.map((b) => (b.id === boxId ? { ...b, questionNumber: safeNum } : b))
+    );
   };
 
   const handleAddManualCropBox = async () => {
@@ -708,6 +806,52 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
               </button>
             </div>
           </div>
+
+          {!hasAnyAIKey && (
+            <div className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-200 space-y-2.5">
+              <div className="flex items-start gap-2 text-xs text-amber-900">
+                <KeyRound className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">کلید Gemini API تنظیم نشده است: </span>
+                  <span>
+                    برای عملکرد دقیق موتور بینایی برش سوالات و استخراج هوشمند پاسخنامه، کلید API خود را اینجا وارد و تست کنید.
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  type="password"
+                  dir="ltr"
+                  value={inlineApiKey}
+                  onChange={(e) => setInlineApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="flex-1 min-w-[200px] px-3 py-2 rounded-lg border border-amber-300 bg-white text-xs font-mono focus:outline-none focus:border-[#6338F9]"
+                />
+                <button
+                  type="button"
+                  disabled={isTestingInlineKey}
+                  onClick={handleQuickSaveAndTestKey}
+                  className="px-3.5 py-2 rounded-lg bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isTestingInlineKey ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Wifi className="w-3.5 h-3.5" />
+                  )}
+                  <span>ذخیره و تست اتصال</span>
+                </button>
+              </div>
+              {inlineKeyMsg && (
+                <p
+                  className={`text-[11px] font-semibold ${
+                    inlineKeyMsg.type === 'success' ? 'text-emerald-700' : 'text-rose-700'
+                  }`}
+                >
+                  {inlineKeyMsg.text}
+                </p>
+              )}
+            </div>
+          )}
 
           {studioMode === 'answer_key' ? (
             <div className="space-y-5">
@@ -1119,11 +1263,35 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                         if (!activeBox) return null;
                         return (
                           <>
-                            <div className="text-xs font-bold text-slate-800 border-b border-slate-200 pb-2">
-                              تنظیم دقیق کادر سوال {toFarsiDigits(activeBox.questionNumber)}
+                            <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                              <span className="text-xs font-bold text-slate-800">
+                                تنظیم کادر سوال {toFarsiDigits(activeBox.questionNumber)}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <label
+                                  htmlFor="box-qnum-input"
+                                  className="text-[11px] text-slate-500"
+                                >
+                                  شماره:
+                                </label>
+                                <input
+                                  id="box-qnum-input"
+                                  type="number"
+                                  min={1}
+                                  max={500}
+                                  value={activeBox.questionNumber}
+                                  onChange={(e) =>
+                                    handleUpdateBoxQuestionNumber(
+                                      activeBox.id,
+                                      Number(e.target.value) || 1
+                                    )
+                                  }
+                                  className="w-14 px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-bold text-center"
+                                />
+                              </div>
                             </div>
 
-                            <div className="space-y-2">
+                            <div className="space-y-1.5">
                               <label className="block text-[11px] text-slate-600">
                                 مرز بالای سوال: {toFarsiDigits(activeBox.ymin)}
                               </label>
@@ -1143,7 +1311,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                               />
                             </div>
 
-                            <div className="space-y-2">
+                            <div className="space-y-1.5">
                               <label className="block text-[11px] text-slate-600">
                                 مرز پایین سوال: {toFarsiDigits(activeBox.ymax)}
                               </label>
@@ -1156,6 +1324,46 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                                   handleUpdateBoxBounds(
                                     activeBox.id,
                                     'ymax',
+                                    Number(e.target.value)
+                                  )
+                                }
+                                className="w-full accent-[#6338F9]"
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="block text-[11px] text-slate-600">
+                                مرز چپ سوال (ستون چپ/راست): {toFarsiDigits(activeBox.xmin)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={950}
+                                value={activeBox.xmin}
+                                onChange={(e) =>
+                                  handleUpdateBoxBounds(
+                                    activeBox.id,
+                                    'xmin',
+                                    Number(e.target.value)
+                                  )
+                                }
+                                className="w-full accent-[#6338F9]"
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="block text-[11px] text-slate-600">
+                                مرز راست سوال: {toFarsiDigits(activeBox.xmax)}
+                              </label>
+                              <input
+                                type="range"
+                                min={50}
+                                max={1000}
+                                value={activeBox.xmax}
+                                onChange={(e) =>
+                                  handleUpdateBoxBounds(
+                                    activeBox.id,
+                                    'xmax',
                                     Number(e.target.value)
                                   )
                                 }

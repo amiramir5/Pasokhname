@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   BarChart3,
@@ -13,13 +13,27 @@ import {
   BookOpen,
   Play,
   CheckCircle2,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Loader2,
+  Wifi,
+  AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import {
   ExamSession,
   SavedAnswerKeyTemplate,
   AppSettings,
   OptionChoice,
+  AIModelPreference,
 } from '../types/exam';
+import {
+  fetchAIStatus,
+  getStoredGeminiApiKey,
+  saveGeminiApiKey,
+  testGeminiConnection,
+} from '../utils/pdfAndVision';
 import {
   toFarsiDigits,
   formatFarsiPercent,
@@ -588,6 +602,66 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [savedToast, setSavedToast] = useState<boolean>(false);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
 
+  // تنظیمات کلید API و مدل هوش مصنوعی
+  const [apiKeyInput, setApiKeyInput] = useState<string>(() => getStoredGeminiApiKey());
+  const [showApiKey, setShowApiKey] = useState<boolean>(false);
+  const [hasServerKey, setHasServerKey] = useState<boolean>(false);
+  const [isTestingAI, setIsTestingAI] = useState<boolean>(false);
+  const [aiTestResult, setAiTestResult] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    fetchAIStatus().then((st) => setHasServerKey(st.hasServerKey));
+  }, []);
+
+  const handleSaveAndTestAI = async () => {
+    setIsTestingAI(true);
+    setAiTestResult({
+      type: 'info',
+      text: 'در حال ذخیره کلید و برقراری ارتباط واقعی با Gemini API...',
+    });
+
+    try {
+      const trimmed = apiKeyInput.trim();
+      if (trimmed) {
+        const saveRes = await saveGeminiApiKey(trimmed, true);
+        if (saveRes.savedToEnvFile) {
+          setHasServerKey(true);
+        }
+      } else {
+        await saveGeminiApiKey('', false);
+      }
+
+      const testRes = await testGeminiConnection(
+        trimmed || undefined,
+        settings.aiModelPreference || 'auto'
+      );
+
+      if (testRes.success) {
+        setAiTestResult({
+          type: 'success',
+          text: `اتصال با موفقیت برقرار شد! مدل: ${testRes.model} · زمان پاسخ: ${toFarsiDigits(
+            testRes.latencyMs ?? 0
+          )} میلی‌ثانیه`,
+        });
+      } else {
+        setAiTestResult({
+          type: 'error',
+          text: testRes.error || 'تست اتصال ناموفق بود.',
+        });
+      }
+    } catch (err: unknown) {
+      setAiTestResult({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'خطا در تست اتصال',
+      });
+    } finally {
+      setIsTestingAI(false);
+    }
+  };
+
   const handleChange = <K extends keyof AppSettings>(key: K, val: AppSettings[K]) => {
     onUpdateSettings({
       ...settings,
@@ -617,6 +691,138 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <CheckCircle2 className="w-4 h-4" />
             <span>ذخیره شد</span>
           </span>
+        )}
+      </div>
+
+      {/* کارت تنظیمات کلید API و مدل هوش مصنوعی */}
+      <div className="bg-white rounded-2xl border border-indigo-100/80 p-6 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-[#6338F9]" />
+            <h2 className="text-sm font-bold text-slate-900">
+              اتصال هوش مصنوعی (Gemini API) و انتخاب مدل
+            </h2>
+          </div>
+
+          <span
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+              apiKeyInput.trim() || hasServerKey
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-amber-50 text-amber-700'
+            }`}
+          >
+            {apiKeyInput.trim()
+              ? 'کلید در مرورگر ثبت شده'
+              : hasServerKey
+              ? 'کلید در سرور (.env) فعال است'
+              : 'کلید API تنظیم نشده است'}
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-500 leading-relaxed">
+          برای برش دقیق سوالات PDF و استخراج هوشمند پاسخنامه به کلید Gemini API نیاز است. کلید هم در مرورگر شما و هم در فایل <code className="px-1 py-0.5 rounded bg-slate-100 text-slate-700">.env</code> سرور محلی ذخیره می‌شود.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label htmlFor="gemini-api-key" className="block text-xs font-semibold text-slate-700">
+              کلید Gemini API
+            </label>
+            <div className="relative">
+              <input
+                id="gemini-api-key"
+                type={showApiKey ? 'text' : 'password'}
+                dir="ltr"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full min-h-[42px] pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono bg-slate-50/50 focus:bg-white focus:border-[#6338F9] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((v) => !v)}
+                aria-label={showApiKey ? 'مخفی کردن کلید' : 'نمایش کلید'}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="ai-model-select" className="block text-xs font-semibold text-slate-700">
+              مدل پردازش تصویر و پاسخنامه
+            </label>
+            <select
+              id="ai-model-select"
+              value={settings.aiModelPreference || 'auto'}
+              onChange={(e) =>
+                handleChange('aiModelPreference', e.target.value as AIModelPreference)
+              }
+              className="w-full min-h-[42px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs bg-white"
+            >
+              <option value="auto">
+                هوشمند (شروع سریع با Gemini 3.6 Flash + ارتقای خودکار به 3.8 Flash در صفحات سخت)
+              </option>
+              <option value="gemini-3.6-flash">Gemini 3.6 Flash (سریع و متعادل)</option>
+              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (فوق‌سریع و سبک)</option>
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash (دقیق‌ترین برای صفحات پیچیده)</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap pt-1">
+          <button
+            type="button"
+            disabled={isTestingAI}
+            onClick={handleSaveAndTestAI}
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+          >
+            {isTestingAI ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Wifi className="w-4 h-4" />
+            )}
+            <span>ذخیره کلید و تست اتصال واقعی</span>
+          </button>
+
+          {apiKeyInput.trim() && (
+            <button
+              type="button"
+              onClick={() => {
+                setApiKeyInput('');
+                saveGeminiApiKey('', false);
+                setAiTestResult({
+                  type: 'info',
+                  text: 'کلید ذخیره‌شده در مرورگر پاک شد.',
+                });
+              }}
+              className="min-h-[42px] px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+            >
+              حذف کلید مرورگر
+            </button>
+          )}
+        </div>
+
+        {aiTestResult && (
+          <div
+            className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
+              aiTestResult.type === 'success'
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                : aiTestResult.type === 'error'
+                ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
+            }`}
+          >
+            {aiTestResult.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : aiTestResult.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 shrink-0" />
+            ) : (
+              <Sparkles className="w-4 h-4 shrink-0" />
+            )}
+            <span>{aiTestResult.text}</span>
+          </div>
         )}
       </div>
 
