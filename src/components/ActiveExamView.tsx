@@ -264,7 +264,7 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
           title="بازگشت به داشبورد (آزمون ذخیره می‌ماند)"
         >
           <img
-            src="/icon.svg"
+            src={`${import.meta.env.BASE_URL}icon.svg`}
             alt="آیکون پاسخبرگ"
             referrerPolicy="no-referrer"
             className="w-8 h-8 md:w-9 md:h-9 rounded-xl shadow-xs"
@@ -638,7 +638,7 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
             <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <img
-                  src="/icon.svg"
+                  src={`${import.meta.env.BASE_URL}icon.svg`}
                   alt=""
                   referrerPolicy="no-referrer"
                   className="w-5 h-5 rounded-md"

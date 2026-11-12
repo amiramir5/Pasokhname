@@ -60,7 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="flex items-center gap-3 group text-right focus:outline-none cursor-pointer"
             >
               <img
-                src="/icon.svg"
+                src={`${import.meta.env.BASE_URL}icon.svg`}
                 alt="آیکون پاسخبرگ"
                 referrerPolicy="no-referrer"
                 className="w-10 h-10 rounded-xl shadow-sm shadow-[#6338F9]/20 group-hover:scale-105 transition-transform"
@@ -156,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="flex items-center gap-2.5 cursor-pointer"
         >
           <img
-            src="/icon.svg"
+            src={`${import.meta.env.BASE_URL}icon.svg`}
             alt="آیکون پاسخبرگ"
             referrerPolicy="no-referrer"
             className="w-8 h-8 rounded-lg shadow-2xs"

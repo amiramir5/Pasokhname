@@ -2,6 +2,11 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { AIModelPreference, BoundingBoxQuestion, OptionChoice } from '../types/exam';
 import { toFarsiDigits } from './farsi';
+import {
+  testConnectionInBrowser,
+  detectQuestionsInBrowser,
+  extractAnswerKeyInBrowser,
+} from './browserGemini';
 
 const API_KEY_STORAGE_KEY = 'pasokhbarg_gemini_api_key';
 
@@ -119,6 +124,7 @@ export async function testGeminiConnection(
   reply?: string;
   error?: string;
 }> {
+  const effectiveKey = (apiKey ?? getStoredGeminiApiKey()).trim();
   const targetModel =
     !model || model === 'auto' ? 'gemini-3.6-flash' : model;
   try {
@@ -130,6 +136,17 @@ export async function testGeminiConnection(
         model: targetModel,
       }),
     });
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      if (!effectiveKey) {
+        return {
+          success: false,
+          model: targetModel,
+          error: 'در نسخه استاتیک (GitHub Pages) ابتدا کلید Gemini API خود را وارد کنید.',
+        };
+      }
+      return await testConnectionInBrowser(effectiveKey, model);
+    }
     const data = await res.json();
     return {
       success: Boolean(res.ok && data.success),
@@ -139,6 +156,9 @@ export async function testGeminiConnection(
       error: data.error,
     };
   } catch (err: unknown) {
+    if (effectiveKey) {
+      return await testConnectionInBrowser(effectiveKey, model);
+    }
     return {
       success: false,
       model: targetModel,
@@ -432,38 +452,75 @@ export async function detectQuestionsOnPageWithAI(
       }),
     });
 
-    const data = await response.json();
-    if (response.ok && data.success && Array.isArray(data.questions) && data.questions.length > 0) {
-      const boxes: BoundingBoxQuestion[] = [];
-      for (let i = 0; i < data.questions.length; i++) {
-        const q = data.questions[i];
-        const ymin = Math.max(0, Math.min(990, Number(q.ymin) || 0));
-        const xmin = Math.max(0, Math.min(990, Number(q.xmin) || 20));
-        const ymax = Math.max(ymin + 15, Math.min(1000, Number(q.ymax) || 1000));
-        const xmax = Math.max(xmin + 20, Math.min(1000, Number(q.xmax) || 980));
-        const box: BoundingBoxQuestion = {
-          id: `p${pageIndex}-q${q.questionNumber || startingQuestionNumber + i}-${i}`,
-          pageIndex,
-          questionNumber: Number(q.questionNumber) || startingQuestionNumber + i,
-          ymin,
-          xmin,
-          ymax,
-          xmax,
-        };
-        box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
-        boxes.push(box);
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const browserKey = getStoredGeminiApiKey();
+      if (browserKey) {
+        const direct = await detectQuestionsInBrowser(
+          browserKey,
+          page.dataUrl,
+          startingQuestionNumber,
+          modelOverride || getStoredAIModelPreference()
+        );
+        if (direct.boxes.length > 0) {
+          const boxes: BoundingBoxQuestion[] = [];
+          for (let i = 0; i < direct.boxes.length; i++) {
+            const q = direct.boxes[i];
+            const box: BoundingBoxQuestion = {
+              id: `p${pageIndex}-q${q.questionNumber}-${i}`,
+              pageIndex,
+              questionNumber: q.questionNumber,
+              ymin: q.ymin,
+              xmin: q.xmin,
+              ymax: q.ymax,
+              xmax: q.xmax,
+            };
+            box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
+            boxes.push(box);
+          }
+          return {
+            boxes,
+            usedFallback: false,
+            modelUsed: direct.modelUsed,
+            escalated: direct.escalated,
+          };
+        }
       }
-      return {
-        boxes,
-        usedFallback: false,
-        modelUsed: data.modelUsed,
-        escalated: Boolean(data.escalated),
-      };
-    }
+      errorReason = 'کلید Gemini API در مرورگر وارد نشده است.';
+    } else {
+      const data = await response.json();
+      if (response.ok && data.success && Array.isArray(data.questions) && data.questions.length > 0) {
+        const boxes: BoundingBoxQuestion[] = [];
+        for (let i = 0; i < data.questions.length; i++) {
+          const q = data.questions[i];
+          const ymin = Math.max(0, Math.min(990, Number(q.ymin) || 0));
+          const xmin = Math.max(0, Math.min(990, Number(q.xmin) || 20));
+          const ymax = Math.max(ymin + 15, Math.min(1000, Number(q.ymax) || 1000));
+          const xmax = Math.max(xmin + 20, Math.min(1000, Number(q.xmax) || 980));
+          const box: BoundingBoxQuestion = {
+            id: `p${pageIndex}-q${q.questionNumber || startingQuestionNumber + i}-${i}`,
+            pageIndex,
+            questionNumber: Number(q.questionNumber) || startingQuestionNumber + i,
+            ymin,
+            xmin,
+            ymax,
+            xmax,
+          };
+          box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
+          boxes.push(box);
+        }
+        return {
+          boxes,
+          usedFallback: false,
+          modelUsed: data.modelUsed,
+          escalated: Boolean(data.escalated),
+        };
+      }
 
-    errorReason =
-      data?.error ||
-      'هوش مصنوعی نتوانست باکس سوالی را در این صفحه تشخیص دهد.';
+      errorReason =
+        data?.error ||
+        'هوش مصنوعی نتوانست باکس سوالی را در این صفحه تشخیص دهد.';
+    }
   } catch (err) {
     errorReason =
       err instanceof Error ? err.message : 'خطا در ارتباط با سرور هوش مصنوعی';
@@ -502,6 +559,18 @@ export async function extractAnswerKeyWithAI(params: {
       model: params.model || getStoredAIModelPreference(),
     }),
   });
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const browserKey = getStoredGeminiApiKey();
+    if (!browserKey) {
+      throw new Error('کلید Gemini API در مرورگر تنظیم نشده است.');
+    }
+    return await extractAnswerKeyInBrowser(browserKey, {
+      ...params,
+      model: params.model || getStoredAIModelPreference(),
+    });
+  }
 
   const data = await response.json();
   if (!response.ok || !data.success) {

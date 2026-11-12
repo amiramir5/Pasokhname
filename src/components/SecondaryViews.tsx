@@ -830,7 +830,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div className="bg-white rounded-2xl border border-indigo-100/80 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <img
-            src="/icon.svg"
+            src={`${import.meta.env.BASE_URL}icon.svg`}
             alt="آیکون پاسخبرگ"
             referrerPolicy="no-referrer"
             className="w-12 h-12 rounded-2xl shadow-xs shrink-0"
