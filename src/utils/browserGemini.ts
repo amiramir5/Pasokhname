@@ -26,6 +26,9 @@ function formatError(error: unknown): string {
   if (lower.includes('403') || lower.includes('permission')) {
     return 'دسترسی کلید API به این مدل محدود شده یا فعال نیست.';
   }
+  if (lower.includes('503') || lower.includes('unavailable') || lower.includes('high demand')) {
+    return 'سرور این مدل موقتاً شلوغ است (503). سیستم به‌صورت خودکار مدل جایگزین را امتحان می‌کند یا چند ثانیه بعد دوباره تلاش کنید.';
+  }
   if (lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')) {
     return 'سهمیه (Quota) یا محدودیت نرخ درخواست کلید API به پایان رسیده است.';
   }
@@ -33,6 +36,36 @@ function formatError(error: unknown): string {
     return 'مدل انتخاب‌شده در دسترس نیست یا نام آن پشتیبانی نمی‌شود.';
   }
   return raw;
+}
+
+function isTransientError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    msg.includes('503') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('429') ||
+    msg.includes('overloaded') ||
+    msg.includes('timeout')
+  );
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function withTransientRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientError(err) || attempt === retries) {
+        throw err;
+      }
+      await sleep(1200 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 function normalizeBoxes(
@@ -203,31 +236,58 @@ export async function detectQuestionsInBrowser(
     );
   };
 
-  let modelUsed = primaryModel;
+  let modelUsed: string = primaryModel;
   let escalated = false;
   let boxes: BrowserNormalizedBox[] = [];
 
-  try {
-    boxes = await runModel(
-      primaryModel,
-      primaryModel === STRONG_MODEL ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM
-    );
-    if (isAuto && needsEscalation(boxes)) {
-      const strong = await runModel(STRONG_MODEL, ThinkingLevel.HIGH);
-      if (strong.length >= boxes.length) {
-        boxes = strong;
-        modelUsed = STRONG_MODEL;
-        escalated = true;
+  // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹
+  const fallbackChain = [
+    primaryModel,
+    ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
+    ...(primaryModel !== 'gemini-3.5-flash-lite' ? ['gemini-3.5-flash-lite'] : []),
+  ];
+
+  let lastErr: unknown;
+  let succeeded = false;
+
+  for (let idx = 0; idx < fallbackChain.length; idx++) {
+    const candidateModel = fallbackChain[idx];
+    const level =
+      candidateModel === STRONG_MODEL ? ThinkingLevel.HIGH : ThinkingLevel.MEDIUM;
+    try {
+      boxes = await withTransientRetry(() => runModel(candidateModel, level), 1);
+      modelUsed = candidateModel;
+      if (idx > 0) escalated = true;
+
+      // اگر در حالت auto هستیم و خروجی مشکوک به ادغام است، یک بار با مدل قوی‌تر هم بررسی می‌کنیم
+      if (idx === 0 && isAuto && needsEscalation(boxes) && candidateModel !== STRONG_MODEL) {
+        try {
+          const strong = await withTransientRetry(
+            () => runModel(STRONG_MODEL, ThinkingLevel.HIGH),
+            1
+          );
+          if (strong.length >= boxes.length) {
+            boxes = strong;
+            modelUsed = STRONG_MODEL;
+            escalated = true;
+          }
+        } catch {
+          // اگر مدل قوی‌تر موقتاً شلوغ بود، همان نتیجه مدل اول را نگه می‌داریم
+        }
+      }
+
+      succeeded = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientError(err) && !isAuto) {
+        throw new Error(formatError(err));
       }
     }
-  } catch (err) {
-    if (isAuto && primaryModel !== STRONG_MODEL) {
-      boxes = await runModel(STRONG_MODEL, ThinkingLevel.HIGH);
-      modelUsed = STRONG_MODEL;
-      escalated = true;
-    } else {
-      throw new Error(formatError(err));
-    }
+  }
+
+  if (!succeeded) {
+    throw new Error(formatError(lastErr));
   }
 
   return { boxes, modelUsed, escalated };

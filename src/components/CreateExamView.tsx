@@ -127,6 +127,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
     text: string;
   } | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
+  const [fallbackPageIndices, setFallbackPageIndices] = useState<number[]>([]);
 
   // وضعیت کلید Gemini API برای نمایش راهنمای سریع در صورت نبود کلید
   const [hasAnyAIKey, setHasAnyAIKey] = useState<boolean>(() => Boolean(getStoredGeminiApiKey()));
@@ -340,6 +341,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
       let lastFallbackError: string | undefined;
       let lastModelUsed: string | undefined;
       let anyEscalated = false;
+      const failedIndices: number[] = [];
 
       for (let pIdx = 0; pIdx < allPages.length; pIdx++) {
         const { boxes, usedFallback, errorReason, modelUsed, escalated } =
@@ -347,6 +349,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
 
         if (usedFallback) {
           fallbackPagesCount++;
+          failedIndices.push(pIdx);
           if (errorReason) lastFallbackError = errorReason;
         }
         if (modelUsed) lastModelUsed = modelUsed;
@@ -365,6 +368,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
         }
       }
 
+      setFallbackPageIndices(failedIndices);
       setDetectedBoxes(allBoxes);
       if (allBoxes.length > 0) {
         setSelectedBoxId(allBoxes[0].id);
@@ -374,9 +378,9 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
             type: 'error',
             text: `هشدار: هوش مصنوعی در ${toFarsiDigits(
               fallbackPagesCount
-            )} صفحه در دسترس نبود (${
-              lastFallbackError || 'کلید API تنظیم نشده'
-            }) و برش با الگوریتم ساده انجام شد. برای برش دقیق، کلید API را وارد کنید.`,
+            )} صفحه با خطا مواجه شد (${
+              lastFallbackError || 'خطای موقت سرور'
+            }) و آن صفحه با روش جایگزین برش خورد.`,
           });
         } else {
           const modelNote = lastModelUsed
@@ -401,6 +405,54 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
     } finally {
       setIsSlicingQuestions(false);
       e.target.value = '';
+    }
+  };
+
+  const handleRetryFailedPages = async () => {
+    if (fallbackPageIndices.length === 0 || renderedPages.length === 0) return;
+    setIsSlicingQuestions(true);
+    setSlicerStatus({
+      type: 'info',
+      text: `در حال تلاش مجدد با هوش مصنوعی برای ${toFarsiDigits(fallbackPageIndices.length)} صفحه...`,
+    });
+
+    try {
+      const stillFailed: number[] = [];
+      let lastErr: string | undefined;
+      let updatedBoxes = detectedBoxes.filter((b) => !fallbackPageIndices.includes(b.pageIndex));
+
+      for (const pIdx of fallbackPageIndices) {
+        const page = renderedPages[pIdx];
+        if (!page) continue;
+        const startHint =
+          updatedBoxes.filter((b) => b.pageIndex < pIdx).length + 1;
+        const res = await detectQuestionsOnPageWithAI(page, pIdx, startHint);
+        if (res.usedFallback) {
+          stillFailed.push(pIdx);
+          if (res.errorReason) lastErr = res.errorReason;
+        }
+        updatedBoxes = [...updatedBoxes, ...res.boxes];
+      }
+
+      updatedBoxes.sort((a, b) =>
+        a.pageIndex !== b.pageIndex ? a.pageIndex - b.pageIndex : a.questionNumber - b.questionNumber
+      );
+
+      setDetectedBoxes(updatedBoxes);
+      setFallbackPageIndices(stillFailed);
+      if (stillFailed.length === 0) {
+        setSlicerStatus({
+          type: 'success',
+          text: `همه صفحات با موفقیت توسط هوش مصنوعی برش خوردند! (${toFarsiDigits(updatedBoxes.length)} سوال)`,
+        });
+      } else {
+        setSlicerStatus({
+          type: 'error',
+          text: `هنوز ${toFarsiDigits(stillFailed.length)} صفحه با خطا مواجه شد (${lastErr || 'خطای موقت'}).`,
+        });
+      }
+    } finally {
+      setIsSlicingQuestions(false);
     }
   };
 
@@ -1174,7 +1226,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
 
               {slicerStatus && (
                 <div
-                  className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
+                  className={`p-3 rounded-xl text-xs font-medium flex flex-col gap-2 ${
                     slicerStatus.type === 'success'
                       ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                       : slicerStatus.type === 'error'
@@ -1182,14 +1234,27 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                       : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
                   }`}
                 >
-                  {isSlicingQuestions ? (
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                  ) : slicerStatus.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 shrink-0" />
+                  <div className="flex items-center gap-2">
+                    {isSlicingQuestions ? (
+                      <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    ) : slicerStatus.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{slicerStatus.text}</span>
+                  </div>
+                  {fallbackPageIndices.length > 0 && !isSlicingQuestions && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={handleRetryFailedPages}
+                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+                      >
+                        تلاش مجدد با هوش مصنوعی برای صفحات خطادار
+                      </button>
+                    </div>
                   )}
-                  <span>{slicerStatus.text}</span>
                 </div>
               )}
 

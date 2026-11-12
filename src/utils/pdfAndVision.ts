@@ -1,7 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { AIModelPreference, BoundingBoxQuestion, OptionChoice } from '../types/exam';
-import { toFarsiDigits } from './farsi';
+import { toFarsiDigits, fromFarsiDigits } from './farsi';
 import {
   testConnectionInBrowser,
   detectQuestionsInBrowser,
@@ -179,6 +179,90 @@ export interface RenderedPageImage {
   dataUrl: string;
   width: number;
   height: number;
+  /** باکس‌های استخراج‌شده از لایه متنی PDF (در صورت وجود متن قابل انتخاب) */
+  textBoxes?: BoundingBoxQuestion[];
+}
+
+/**
+ * استخراج تقریبی محدوده سوالات از لایه متنی PDF در صورت وجود
+ */
+async function extractPdfTextQuestionBoxes(
+  page: pdfjsLib.PDFPageProxy,
+  viewport: pdfjsLib.PageViewport,
+  pageIndex: number
+): Promise<BoundingBoxQuestion[]> {
+  try {
+    const textContent = await page.getTextContent();
+    interface Anchor {
+      qNum: number;
+      xNorm: number;
+      yNorm: number;
+    }
+    const anchors: Anchor[] = [];
+    const seenNums = new Set<number>();
+
+    for (const rawItem of textContent.items) {
+      if (!('str' in rawItem) || !Array.isArray(rawItem.transform)) continue;
+      const text = fromFarsiDigits(rawItem.str).trim();
+      if (!text) continue;
+
+      // تطبیق شروع شماره سوال مثل "11-" یا "۷." یا "(3)" (و پرهیز از اعداد 4 رقمی یا گزینه‌های 1) 2) 3) 4))
+      const m = text.match(/^(?:\((\d{1,3})\)|(\d{1,3})\s*[-–.])(?:\s|$)/);
+      if (!m) continue;
+      const qNum = Number(m[1] || m[2]);
+      if (!Number.isInteger(qNum) || qNum < 1 || qNum > 300 || seenNums.has(qNum)) continue;
+
+      const [, , , , tx, ty] = rawItem.transform;
+      const [vx, vy] = viewport.convertToViewportPoint(tx, ty);
+      const xNorm = Math.max(0, Math.min(1000, Math.round((vx / viewport.width) * 1000)));
+      const yNorm = Math.max(0, Math.min(1000, Math.round((vy / viewport.height) * 1000)));
+
+      // نادیده گرفتن هدر و فوتر خیلی بالا/پایین
+      if (yNorm < 40 || yNorm > 960) continue;
+
+      seenNums.add(qNum);
+      anchors.push({ qNum, xNorm, yNorm });
+    }
+
+    if (anchors.length < 2) return [];
+
+    // تشخیص دوستونی بودن بر اساس موقعیت X شماره‌های سوال
+    const rightAnchors = anchors.filter((a) => a.xNorm >= 480);
+    const leftAnchors = anchors.filter((a) => a.xNorm < 480);
+    const isTwoColumn = rightAnchors.length >= 1 && leftAnchors.length >= 1;
+
+    const buildColumnBoxes = (
+      colAnchors: Anchor[],
+      xmin: number,
+      xmax: number
+    ): BoundingBoxQuestion[] => {
+      const sorted = [...colAnchors].sort((a, b) => a.yNorm - b.yNorm);
+      return sorted.map((anc, idx) => {
+        const nextY = idx + 1 < sorted.length ? sorted[idx + 1].yNorm - 14 : 970;
+        const ymin = Math.max(0, anc.yNorm - 22);
+        const ymax = Math.min(990, Math.max(ymin + 55, nextY));
+        return {
+          id: `p${pageIndex}-txt-q${anc.qNum}-${idx}`,
+          pageIndex,
+          questionNumber: anc.qNum,
+          ymin,
+          xmin,
+          ymax,
+          xmax,
+        };
+      });
+    };
+
+    if (isTwoColumn) {
+      return [
+        ...buildColumnBoxes(rightAnchors, 495, 980),
+        ...buildColumnBoxes(leftAnchors, 20, 505),
+      ];
+    }
+    return buildColumnBoxes(anchors, 20, 980);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -214,11 +298,14 @@ export async function renderPdfFileToImages(
       canvas,
     }).promise;
 
+    const textBoxes = await extractPdfTextQuestionBoxes(page, viewport, i - 1);
+
     pages.push({
       pageNumber: i,
       dataUrl: canvas.toDataURL('image/jpeg', 0.9),
       width: canvas.width,
       height: canvas.height,
+      textBoxes: textBoxes.length >= 2 ? textBoxes : undefined,
     });
     page.cleanup();
   }
@@ -355,11 +442,12 @@ export async function detectQuestionBandsVisualFallback(
           rowInk[y] = darkPixels / spanW;
         }
 
-        const minGapBetweenQuestions = Math.max(12, Math.floor(h * 0.013));
-        const minQuestionHeight = Math.max(45, Math.floor(h * 0.055));
+        const minGapBetweenQuestions = Math.max(16, Math.floor(h * 0.017));
+        const minRawBlockHeight = Math.max(18, Math.floor(h * 0.015));
+        const minQuestionHeight = Math.max(48, Math.floor(h * 0.052));
         const inkThreshold = 0.004;
 
-        const blocks: { startY: number; endY: number; xmin: number; xmax: number }[] = [];
+        const rawParts: { startY: number; endY: number; xmin: number; xmax: number }[] = [];
         let inBlock = false;
         let blockStart = 0;
         let blankRun = 0;
@@ -375,8 +463,8 @@ export async function detectQuestionBandsVisualFallback(
             blankRun++;
             if (blankRun >= minGapBetweenQuestions) {
               const blockEnd = y - blankRun;
-              if (blockEnd - blockStart >= minQuestionHeight) {
-                blocks.push({
+              if (blockEnd - blockStart >= minRawBlockHeight) {
+                rawParts.push({
                   startY: blockStart,
                   endY: blockEnd,
                   xmin: Math.round(xStartRatio * 1000),
@@ -388,13 +476,33 @@ export async function detectQuestionBandsVisualFallback(
             }
           }
         }
-        if (inBlock && scanEndY - blockStart >= minQuestionHeight) {
-          blocks.push({
+        if (inBlock && scanEndY - blockStart >= minRawBlockHeight) {
+          rawParts.push({
             startY: blockStart,
             endY: scanEndY,
             xmin: Math.round(xStartRatio * 1000),
             xmax: Math.round(xEndRatio * 1000),
           });
+        }
+
+        // ادغام صورت‌سوال‌های کوتاه ۱-۲ خطی با بلوک گزینه‌های بلافاصله بعد از خودشان
+        const blocks: typeof rawParts = [];
+        for (let i = 0; i < rawParts.length; i++) {
+          const cur = rawParts[i];
+          const curH = cur.endY - cur.startY;
+          if (curH < minQuestionHeight && i + 1 < rawParts.length) {
+            const next = rawParts[i + 1];
+            if (next.startY - cur.endY < Math.floor(h * 0.04)) {
+              rawParts[i + 1] = {
+                ...next,
+                startY: cur.startY,
+              };
+              continue;
+            }
+          }
+          if (curH >= minRawBlockHeight) {
+            blocks.push(cur);
+          }
         }
         return blocks;
       };
@@ -527,12 +635,15 @@ export async function detectQuestionsOnPageWithAI(
     console.warn('AI question detection fallback triggered:', err);
   }
 
-  // در صورت خطای شبکه یا کلید، از تشخیصگر بصری ساختار صفحه استفاده می‌شود
-  const fallbackBoxes = await detectQuestionBandsVisualFallback(
-    page.dataUrl,
-    pageIndex,
-    startingQuestionNumber
-  );
+  // در صورت خطای شبکه یا شلوغی موقت سرور، ابتدا از لایه متنی PDF (در صورت وجود) و سپس از تشخیصگر بصری استفاده می‌شود
+  const fallbackBoxes =
+    page.textBoxes && page.textBoxes.length >= 2
+      ? page.textBoxes.map((b) => ({ ...b }))
+      : await detectQuestionBandsVisualFallback(
+          page.dataUrl,
+          pageIndex,
+          startingQuestionNumber
+        );
   for (const box of fallbackBoxes) {
     box.croppedDataUrl = await cropImageFromBoundingBox(page.dataUrl, box);
   }
