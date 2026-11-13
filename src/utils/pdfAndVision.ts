@@ -354,10 +354,20 @@ export function cropImageFromBoundingBox(
       const w = img.naturalWidth;
       const h = img.naturalHeight;
 
-      const x1 = Math.max(0, Math.floor((Math.min(box.xmin, box.xmax) / 1000) * w));
-      const y1 = Math.max(0, Math.floor((Math.min(box.ymin, box.ymax) / 1000) * h));
-      const x2 = Math.min(w, Math.ceil((Math.max(box.xmin, box.xmax) / 1000) * w));
-      const y2 = Math.min(h, Math.ceil((Math.max(box.ymin, box.ymax) / 1000) * h));
+      // حاشیه امن اضافی (Padding) هنگام برش روی تصویر واقعی:
+      // ۱.۵٪ حاشیه افقی و ۱.۵٪ حاشیه عمودی تا هیچ گزینه‌ای لب‌به‌لب نماند
+      const padXPx = Math.round(w * 0.015);
+      const padYPx = Math.round(h * 0.015);
+
+      const rawX1 = Math.floor((Math.min(box.xmin, box.xmax) / 1000) * w);
+      const rawY1 = Math.floor((Math.min(box.ymin, box.ymax) / 1000) * h);
+      const rawX2 = Math.ceil((Math.max(box.xmin, box.xmax) / 1000) * w);
+      const rawY2 = Math.ceil((Math.max(box.ymin, box.ymax) / 1000) * h);
+
+      const x1 = Math.max(0, rawX1 - padXPx);
+      const y1 = Math.max(0, rawY1 - padYPx);
+      const x2 = Math.min(w, rawX2 + padXPx);
+      const y2 = Math.min(h, rawY2 + padYPx);
 
       const cropW = Math.max(40, x2 - x1);
       const cropH = Math.max(30, y2 - y1);
