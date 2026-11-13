@@ -362,7 +362,7 @@ async function startServer() {
         model: targetModel,
         contents: 'فقط کلمه OK را بنویس.',
         config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           maxOutputTokens: 16,
         },
       });
