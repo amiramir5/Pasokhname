@@ -20,6 +20,8 @@ import {
   Wifi,
   AlertCircle,
   Sparkles,
+  Download,
+  Upload,
 } from 'lucide-react';
 import {
   ExamSession,
@@ -592,15 +594,21 @@ interface SettingsViewProps {
   settings: AppSettings;
   onUpdateSettings: (next: AppSettings) => void;
   onClearAllExams: () => void;
+  onExportBackup?: () => void;
+  onImportBackup?: (file: File) => Promise<{ success: boolean; count: number; error?: string }>;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onUpdateSettings,
   onClearAllExams,
+  onExportBackup,
+  onImportBackup,
 }) => {
   const [savedToast, setSavedToast] = useState<boolean>(false);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
+  const [backupMsg, setBackupMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const backupInputRef = React.useRef<HTMLInputElement>(null);
 
   // تنظیمات کلید API و مدل هوش مصنوعی
   const [apiKeyInput, setApiKeyInput] = useState<string>(() => getStoredGeminiApiKey());
@@ -957,6 +965,82 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
         </div>
+      </div>
+
+      {/* بخش پشتیبان‌گیری و بازیابی داده‌ها و تاریخچه آزمون‌ها */}
+      <div className="bg-white rounded-2xl border border-indigo-100/80 p-6 space-y-4">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+          <Download className="w-4 h-4 text-[#6338F9]" />
+          <h2 className="text-sm font-bold text-slate-900">پشتیبان‌گیری و بازیابی تاریخچه آزمون‌ها</h2>
+        </div>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          برای اینکه تغییرات مرورگر یا پاک شدن حافظه کش باعث از بین رفتن آزمون‌ها و پاسخنامه‌ها نشود، می‌توانید از کل داده‌های خود یک فایل پشتیبان (JSON) دانلود کنید و هر زمان که خواستید آن را دوباره بازیابی کنید.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          {onExportBackup && (
+            <button
+              type="button"
+              onClick={onExportBackup}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-xs"
+            >
+              <Download className="w-4 h-4" />
+              <span>دانلود فایل پشتیبان (Backup)</span>
+            </button>
+          )}
+
+          {onImportBackup && (
+            <>
+              <input
+                ref={backupInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const res = await onImportBackup(file);
+                  if (res.success) {
+                    setBackupMsg({
+                      type: 'success',
+                      text: `پشتیبان با موفقیت بازیابی شد! (${toFarsiDigits(res.count)} آزمون)`,
+                    });
+                  } else {
+                    setBackupMsg({
+                      type: 'error',
+                      text: res.error || 'خطا در خواندن فایل پشتیبان.',
+                    });
+                  }
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => backupInputRef.current?.click()}
+                className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-2 cursor-pointer"
+              >
+                <Upload className="w-4 h-4 text-slate-500" />
+                <span>بارگذاری و بازیابی فایل پشتیبان</span>
+              </button>
+            </>
+          )}
+        </div>
+
+        {backupMsg && (
+          <div
+            className={`p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
+              backupMsg.type === 'success'
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                : 'bg-rose-50 text-rose-800 border border-rose-200'
+            }`}
+          >
+            {backupMsg.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0" />
+            )}
+            <span>{backupMsg.text}</span>
+          </div>
+        )}
       </div>
     </div>
   );

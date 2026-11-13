@@ -256,6 +256,53 @@ export default function App() {
     if (reportExamId === examId) setReportExamId(null);
   };
 
+  // خروجی فایل پشتیبان (Export Backup)
+  const handleExportBackup = () => {
+    const backupData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      exams,
+      savedKeys,
+      settings,
+    };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pasokhbarg-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // بازیابی فایل پشتیبان (Import Backup)
+  const handleImportBackup = async (
+    file: File
+  ): Promise<{ success: boolean; count: number; error?: string }> => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data || !Array.isArray(data.exams)) {
+        return { success: false, count: 0, error: 'فرمت فایل پشتیبان نامعتبر است.' };
+      }
+      setExams(data.exams);
+      if (Array.isArray(data.savedKeys)) {
+        setSavedKeys(data.savedKeys);
+      }
+      if (data.settings && typeof data.settings === 'object') {
+        setSettings((prev) => ({ ...prev, ...data.settings }));
+      }
+      return { success: true, count: data.exams.length };
+    } catch (err) {
+      return {
+        success: false,
+        count: 0,
+        error: err instanceof Error ? err.message : 'خطا در خواندن فایل',
+      };
+    }
+  };
+
   const handleSaveKeyTemplate = (
     template: Omit<SavedAnswerKeyTemplate, 'id' | 'createdAt'>
   ) => {
@@ -389,6 +436,8 @@ export default function App() {
           <SettingsView
             settings={settings}
             onUpdateSettings={setSettings}
+            onExportBackup={handleExportBackup}
+            onImportBackup={handleImportBackup}
             onClearAllExams={() => {
               void clearAllImagesFromIDB();
               setExams([]);

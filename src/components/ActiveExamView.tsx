@@ -295,6 +295,18 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
             <span className="hidden sm:inline">{isPaused ? 'ادامه زمان' : 'توقف زمان'}</span>
           </button>
 
+          {/* زمان باقی‌مانده چسبان همیشه در دسترس در هدر آزمون */}
+          <div
+            className={`px-3 py-1.5 rounded-xl border flex items-center gap-1.5 tabular-farsi ${
+              remainingSeconds < 60
+                ? 'bg-rose-50 border-rose-300 text-rose-600 animate-pulse font-extrabold text-sm'
+                : 'bg-[#F3EEFF] border-[#6338F9]/30 text-[#6338F9] font-bold text-xs sm:text-sm'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>باقی‌مانده: {formatFarsiTimer(remainingSeconds)}</span>
+          </div>
+
           <button
             type="button"
             onClick={() => onFinishExam(exam)}
@@ -464,18 +476,23 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() => setImageZoom((z) => Math.max(60, z - 15))}
+                        onClick={() => setImageZoom((z) => Math.max(50, z - 20))}
                         aria-label="کوچک‌نمایی تصویر سوال"
                         className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
                       >
                         <ZoomOut className="w-4 h-4" />
                       </button>
-                      <span className="text-xs font-bold text-slate-600 tabular-farsi px-1">
-                        {toFarsiDigits(imageZoom)}٪
-                      </span>
                       <button
                         type="button"
-                        onClick={() => setImageZoom((z) => Math.min(160, z + 15))}
+                        onClick={() => setImageZoom(100)}
+                        title="بازنشانی اندازه تصویر به ۱۰۰٪"
+                        className="text-xs font-bold text-slate-600 hover:text-[#6338F9] tabular-farsi px-1.5 py-0.5 rounded cursor-pointer"
+                      >
+                        {toFarsiDigits(imageZoom)}٪
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImageZoom((z) => Math.min(250, z + 20))}
                         aria-label="بزرگ‌نمایی تصویر سوال"
                         className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
                       >
@@ -484,13 +501,16 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="bg-slate-50/70 rounded-2xl border border-slate-200/80 p-3 md:p-4 flex items-center justify-center overflow-auto max-h-[360px]">
+                  <div className="bg-slate-50/70 rounded-2xl border border-slate-200/80 p-3 md:p-4 flex items-center justify-center overflow-auto max-h-[360px] select-none">
                     <img
                       src={currentQuestion.croppedImageUrl}
                       alt={`سوال ${toFarsiDigits(currentQuestion.questionNumber)}`}
                       referrerPolicy="no-referrer"
-                      style={{ width: `${imageZoom}%` }}
-                      className="rounded-xl object-contain transition-all"
+                      style={{
+                        transform: `scale(${imageZoom / 100})`,
+                        transformOrigin: 'top center',
+                      }}
+                      className="rounded-xl object-contain transition-transform duration-150 max-w-full"
                     />
                   </div>
                 </div>
@@ -629,7 +649,7 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
 
         {/* ستون چپ: پاسخبرگ */}
         <aside
-          className={`md:col-span-5 lg:col-span-4 bg-white rounded-2xl border border-indigo-100/80 p-4 sm:p-5 flex flex-col justify-between ${
+          className={`md:col-span-5 lg:col-span-4 bg-white rounded-2xl border border-indigo-100/80 p-4 sm:p-5 flex flex-col justify-between md:sticky md:top-18 md:max-h-[calc(100vh-5.5rem)] md:overflow-y-auto ${
             mobilePane === 'question' ? 'hidden md:flex' : 'flex'
           }`}
         >
@@ -673,6 +693,20 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* راهنمای ستون‌ها در نمای ردیفی: سوال | ۱ ۲ ۳ ۴ | نشانگرها */}
+            {sheetViewMode === 'rows' && (
+              <div className="px-2.5 pt-2 pb-1 flex items-center justify-between text-[11px] font-bold text-slate-400 select-none">
+                <span className="w-7 text-right">سوال</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-8 sm:w-9 text-center">۱</span>
+                  <span className="w-8 sm:w-9 text-center">۲</span>
+                  <span className="w-8 sm:w-9 text-center">۳</span>
+                  <span className="w-8 sm:w-9 text-center">۴</span>
+                </div>
+                <div className="w-22 text-left pl-1">علامت</div>
+              </div>
+            )}
 
             {/* نوار فیلتر سریع بر اساس نشانگرها */}
             <div className="flex items-center gap-1.5 flex-wrap py-3 border-b border-slate-100">
@@ -735,17 +769,19 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
                         isCurrent
                       )}`}
                     >
+                      {/* شماره سوال در سمت راست */}
                       <button
                         type="button"
                         onClick={() => {
                           setCurrentIndex(idx);
                           setMobilePane('question');
                         }}
-                        className="w-7 text-right font-bold text-xs text-slate-800 tabular-farsi cursor-pointer"
+                        className="w-7 text-right font-bold text-xs text-slate-800 tabular-farsi cursor-pointer shrink-0"
                       >
                         {toFarsiDigits(q.questionNumber)}
                       </button>
 
+                      {/* گزینه‌های ۱ تا ۴ از راست به چپ: ۱، ۲، ۳، ۴ */}
                       <div className="flex items-center gap-1.5">
                         {([1, 2, 3, 4] as OptionChoice[]).map((opt) => {
                           const isSelected = q.selectedOption === opt;
@@ -770,7 +806,8 @@ export const ActiveExamView: React.FC<ActiveExamViewProps> = ({
                         })}
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      {/* دکمه‌های نشانگر در سمت چپ */}
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleToggleMarker(idx, 'circle')}
