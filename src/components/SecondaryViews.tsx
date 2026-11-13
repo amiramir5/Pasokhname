@@ -762,11 +762,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               className="w-full min-h-[42px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs bg-white"
             >
               <option value="auto">
-                هوشمند (شروع سریع با Gemini 3.6 Flash + ارتقای خودکار به 3.8 Flash در صفحات سخت)
+                هوشمند (شروع پرسرعت با Gemini 4 Hydrogen + ارتقا و فال‌بک با 3.5 Flash-Lite و 3.8 Flash)
               </option>
-              <option value="gemini-3.6-flash">Gemini 3.6 Flash (سریع و متعادل)</option>
-              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (فوق‌سریع و سبک)</option>
-              <option value="gemini-3.8-flash">Gemini 3.8 Flash (دقیق‌ترین برای صفحات پیچیده)</option>
+              <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (نسل جدید ۴، فوق‌سریع و دقیق)</option>
+              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (بسیار سبک و ارزان)</option>
+              <option value="gemini-3.6-flash">Gemini 3.6 Flash (متعادل)</option>
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash (حداکثر دقت برای صفحات پیچیده)</option>
             </select>
           </div>
         </div>

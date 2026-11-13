@@ -1,11 +1,12 @@
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { AIModelPreference, OptionChoice } from '../types/exam';
 
-const FAST_MODEL = 'gemini-3.6-flash';
+const FAST_MODEL = 'gemini-4-hydrogen';
 const STRONG_MODEL = 'gemini-3.8-flash';
 const ALLOWED_MODELS = new Set([
-  'gemini-3.6-flash',
+  'gemini-4-hydrogen',
   'gemini-3.5-flash-lite',
+  'gemini-3.6-flash',
   'gemini-3.8-flash',
 ]);
 
@@ -240,11 +241,12 @@ export async function detectQuestionsInBrowser(
   let escalated = false;
   let boxes: BrowserNormalizedBox[] = [];
 
-  // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹
+  // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹ (ترکیب هیدروژن و فلش ۳.۵ لایت + مدل قوی‌تر ۳.۸)
   const fallbackChain = [
     primaryModel,
-    ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
     ...(primaryModel !== 'gemini-3.5-flash-lite' ? ['gemini-3.5-flash-lite'] : []),
+    ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
+    ...(primaryModel !== 'gemini-3.6-flash' ? ['gemini-3.6-flash'] : []),
   ];
 
   let lastErr: unknown;

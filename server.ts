@@ -11,11 +11,12 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const FAST_MODEL = 'gemini-3.6-flash';
+const FAST_MODEL = 'gemini-4-hydrogen';
 const STRONG_MODEL = 'gemini-3.8-flash';
 const ALLOWED_MODELS = new Set([
-  'gemini-3.6-flash',
+  'gemini-4-hydrogen',
   'gemini-3.5-flash-lite',
+  'gemini-3.6-flash',
   'gemini-3.8-flash',
 ]);
 
@@ -285,7 +286,7 @@ async function startServer() {
     res.json({
       hasServerKey: isUsableKey(process.env.GEMINI_API_KEY),
       defaultModel: FAST_MODEL,
-      supportedModels: ['auto', FAST_MODEL, 'gemini-3.5-flash-lite', STRONG_MODEL],
+      supportedModels: ['auto', FAST_MODEL, 'gemini-3.5-flash-lite', 'gemini-3.6-flash', STRONG_MODEL],
     });
   });
 
@@ -557,8 +558,9 @@ ${textInput ? `\nمتن ورودی کاربر:\n${textInput}` : ''}`;
 
       const fallbackChain = [
         primaryModel,
-        ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
         ...(primaryModel !== 'gemini-3.5-flash-lite' ? ['gemini-3.5-flash-lite'] : []),
+        ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
+        ...(primaryModel !== 'gemini-3.6-flash' ? ['gemini-3.6-flash'] : []),
       ];
 
       let lastErr: unknown;

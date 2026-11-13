@@ -63,16 +63,16 @@ export async function fetchAIStatus(): Promise<{
   try {
     const res = await fetch('/api/ai/status');
     if (!res.ok) {
-      return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-3.6-flash' };
+      return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-4-hydrogen' };
     }
     const data = await res.json();
     return {
       hasServerKey: Boolean(data.hasServerKey),
       hasBrowserKey,
-      defaultModel: data.defaultModel || 'gemini-3.6-flash',
+      defaultModel: data.defaultModel || 'gemini-4-hydrogen',
     };
   } catch {
-    return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-3.6-flash' };
+    return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-4-hydrogen' };
   }
 }
 
@@ -126,7 +126,7 @@ export async function testGeminiConnection(
 }> {
   const effectiveKey = (apiKey ?? getStoredGeminiApiKey()).trim();
   const targetModel =
-    !model || model === 'auto' ? 'gemini-3.6-flash' : model;
+    !model || model === 'auto' ? 'gemini-4-hydrogen' : model;
   try {
     const res = await fetch('/api/ai/test-connection', {
       method: 'POST',
