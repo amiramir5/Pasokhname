@@ -46,7 +46,7 @@ import {
 } from '../utils/farsi';
 import { computeSubjectProgress } from '../utils/scoring';
 import { getAttemptSummary } from '../utils/examAttempts';
-import { MODEL_LABELS } from '../utils/aiModels';
+import { ALLOWED_MODELS, MODEL_LABELS, isAllowedModel } from '../utils/aiModels';
 import { PWAInstallButton } from './PWAInstallButton';
 
 /* ==========================================
@@ -785,31 +785,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </label>
             <select
               id="ai-model-select"
-              value={settings.aiModelPreference || 'auto'}
+              value={isAllowedModel(settings.aiModelPreference) ? settings.aiModelPreference : 'auto'}
               onChange={(e) =>
                 handleChange('aiModelPreference', e.target.value as AIModelPreference)
               }
               className="w-full min-h-[42px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs bg-white"
             >
               <option value="auto">{MODEL_LABELS.auto}</option>
-              {(
-                [
-                  'gemini-4-hydrogen',
-                  'gemini-4-argon',
-                  'gemini-4-carbon',
-                  'gemini-3.5-flash-lite',
-                  'gemini-3.6-flash',
-                  'gemini-3.8-flash',
-                ] as AIModelPreference[]
-              ).map((modelValue) => (
+              {ALLOWED_MODELS.map((modelValue) => (
                 <option key={modelValue} value={modelValue}>
                   {MODEL_LABELS[modelValue]}
                 </option>
               ))}
             </select>
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              در حالت هوشمند، استخراج پاسخنامه با ارزان‌ترین مدل شروع می‌شود و فقط در صورت
-              نیاز به‌صورت خودکار ارتقا می‌یابد؛ تشخیص باکس سوالات با Gemini 4 Hydrogen انجام می‌شود.
+              فقط مدل‌های رایگان Gemini API نمایش داده می‌شوند (Argon و Carbon فقط با کلید
+              پرداختی کار می‌کنند). در حالت هوشمند، استخراج پاسخنامه با Flash-Lite شروع می‌شود و
+              تشخیص باکس سوالات با Gemini 3.6 Flash انجام می‌شود.
             </p>
           </div>
         </div>

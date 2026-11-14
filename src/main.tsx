@@ -1,5 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
+// باید قبل از هر چیز import شود تا رویداد beforeinstallprompt از دست نرود
+import './utils/pwaInstallPrompt';
 import App from './App.tsx';
 import './index.css';
 

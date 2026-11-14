@@ -1,39 +1,30 @@
 import { AIModelPreference } from '../types/exam';
 
 /**
- * نام‌گذاری مدل‌ها بر اساس آخرین نسخه‌های رسمی Gemini API (نسل ۴ + شاخه پایدار ۳):
- * - gemini-4-hydrogen: مدل سریع و کم‌هزینه نسل ۴ (مناسب OCR صفحات و برش سوال)
- * - gemini-4-argon:   استدلال دقیق‌تر نسل ۴ با هزینه کمتر از Carbon (مناسب صفحات پیچیده و فال‌بک)
- * - gemini-4-carbon:  قوی‌ترین مدل استدلالی نسل ۴ (فقط برای سخت‌ترین صفحات)
- * - gemini-3.5-flash-lite: ارزان‌ترین و سریع‌ترین مدل پایدار (مناسب استخراج سبک کلید پاسخنامه)
- * - gemini-3.6-flash / gemini-3.8-flash: مدل‌های پایدار نسل قبل
+ * فقط مدل‌هایی که روی پلن رایگان Gemini API قابل استفاده‌اند و در عمل پاسخ می‌دهند.
+ * مدل‌های Argon و Carbon (و همچنین 3.8 Flash) حذف شده‌اند چون فقط با کلید پرداختی کار می‌کنند.
+ *
+ * - gemini-3.5-flash-lite: سریع‌ترین و ارزان‌ترین؛ پیش‌فرض استخراج کلید پاسخنامه
+ * - gemini-3.6-flash:      متعادل؛ پیش‌فرض تشخیص باکس سوالات و OCR صفحات
+ * - gemini-4-hydrogen:     دقیق‌تر ولی کندتر؛ فقط به‌عنوان فال‌بک کیفیت
  */
-export const FAST_MODEL = 'gemini-4-hydrogen';
-export const STRONG_MODEL = 'gemini-4-argon';
 export const CHEAPEST_MODEL = 'gemini-3.5-flash-lite';
-export const MAX_MODEL = 'gemini-4-carbon';
-export const PREVIOUS_STRONG_MODEL = 'gemini-3.8-flash';
-export const PREVIOUS_BALANCED_MODEL = 'gemini-3.6-flash';
+export const FAST_MODEL = 'gemini-3.6-flash';
+export const STRONG_MODEL = 'gemini-4-hydrogen';
 
 export const ALLOWED_MODELS: AIModelPreference[] = [
-  'gemini-4-hydrogen',
-  'gemini-4-argon',
-  'gemini-4-carbon',
   'gemini-3.5-flash-lite',
   'gemini-3.6-flash',
-  'gemini-3.8-flash',
+  'gemini-4-hydrogen',
 ];
 
 export const ALLOWED_MODEL_SET = new Set<string>(ALLOWED_MODELS);
 
 export const MODEL_LABELS: Record<AIModelPreference, string> = {
-  auto: 'هوشمند (شروع سریع و ارتقای خودکار در صورت نیاز)',
-  'gemini-4-hydrogen': 'Gemini 4 Hydrogen — سریع و مقرون‌به‌صرفه (پیشنهادی)',
-  'gemini-4-argon': 'Gemini 4 Argon — استدلال دقیق‌تر با مصرف متعادل',
-  'gemini-4-carbon': 'Gemini 4 Carbon — حداکثر دقت برای صفحات بسیار پیچیده',
-  'gemini-3.5-flash-lite': 'Gemini 3.5 Flash-Lite — ارزان‌ترین و سبک‌ترین',
-  'gemini-3.6-flash': 'Gemini 3.6 Flash — نسل قبل، متعادل',
-  'gemini-3.8-flash': 'Gemini 3.8 Flash — نسل قبل، پایدار',
+  auto: 'هوشمند — شروع با سریع‌ترین مدل و ارتقای خودکار در صورت نیاز',
+  'gemini-3.5-flash-lite': 'Gemini 3.5 Flash-Lite — سریع‌ترین و سبک‌ترین (رایگان)',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash — متعادل و دقیق (رایگان)',
+  'gemini-4-hydrogen': 'Gemini 4 Hydrogen — دقیق‌تر ولی کندتر (رایگان)',
 };
 
 /** مدل پیش‌فرض برای استخراج پاسخنامه: ارزان‌ترین مدل مناسب OCR */

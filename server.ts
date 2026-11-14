@@ -11,17 +11,14 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// آخرین نام‌گذاری رسمی مدل‌های Gemini (نسل ۴ + شاخه پایدار ۳)
-const FAST_MODEL = 'gemini-4-hydrogen';
-const STRONG_MODEL = 'gemini-4-argon';
+// فقط مدل‌های قابل استفاده روی پلن رایگان (Argon/Carbon/3.8 فقط با کلید پرداختی کار می‌کنند)
 const CHEAPEST_MODEL = 'gemini-3.5-flash-lite';
+const FAST_MODEL = 'gemini-3.6-flash';
+const STRONG_MODEL = 'gemini-4-hydrogen';
 const ALLOWED_MODELS = new Set([
-  'gemini-4-hydrogen',
-  'gemini-4-argon',
-  'gemini-4-carbon',
   'gemini-3.5-flash-lite',
   'gemini-3.6-flash',
-  'gemini-3.8-flash',
+  'gemini-4-hydrogen',
 ]);
 
 function isUsableKey(key: string | undefined | null): key is string {
@@ -291,7 +288,7 @@ async function startServer() {
     res.json({
       hasServerKey: isUsableKey(process.env.GEMINI_API_KEY),
       defaultModel: FAST_MODEL,
-      supportedModels: ['auto', FAST_MODEL, STRONG_MODEL, CHEAPEST_MODEL, 'gemini-3.6-flash', 'gemini-3.8-flash'],
+      supportedModels: ['auto', CHEAPEST_MODEL, FAST_MODEL, STRONG_MODEL],
     });
   });
 
@@ -608,12 +605,9 @@ ${textInput ? `\nمتن پاسخنامه/کلید:\n${textInput}` : ''}`;
       let escalated = false;
       let questions: NormalizedQuestionBox[] = [];
 
-      const fallbackChain = [
-        primaryModel,
-        ...(primaryModel !== 'gemini-3.5-flash-lite' ? ['gemini-3.5-flash-lite'] : []),
-        ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
-        ...(primaryModel !== 'gemini-3.6-flash' ? ['gemini-3.6-flash'] : []),
-      ];
+      const fallbackChain = Array.from(
+        new Set([primaryModel, FAST_MODEL, CHEAPEST_MODEL, STRONG_MODEL])
+      );
 
       let lastErr: unknown;
       let succeeded = false;

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Download, Smartphone, X, CheckCircle2 } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { getDeferredInstallPrompt } from '../utils/pwaInstallPrompt';
 
 interface PWAInstallButtonProps {
   compact?: boolean;
@@ -21,11 +22,12 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ compact = fa
   }
 
   const handleClick = async () => {
-    if (isInstallable) {
+    // اگر مرورگر رویداد نصب را داده باشد، مستقیماً پنجره نصب خودش را باز می‌کنیم.
+    if (isInstallable || getDeferredInstallPrompt()) {
       await install();
-    } else {
-      setShowGuideModal(true);
+      return;
     }
+    setShowGuideModal(true);
   };
 
   return (

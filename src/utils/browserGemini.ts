@@ -4,8 +4,6 @@ import {
   ALLOWED_MODEL_SET,
   CHEAPEST_MODEL,
   FAST_MODEL,
-  PREVIOUS_BALANCED_MODEL,
-  PREVIOUS_STRONG_MODEL,
   STRONG_MODEL,
   resolveAnswerKeyModel,
 } from './aiModels';
@@ -249,12 +247,9 @@ export async function detectQuestionsInBrowser(
   let boxes: BrowserNormalizedBox[] = [];
 
   // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹
-  const fallbackChain = [
-    primaryModel,
-    ...(primaryModel !== PREVIOUS_STRONG_MODEL ? [PREVIOUS_STRONG_MODEL] : []),
-    ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
-    ...(primaryModel !== PREVIOUS_BALANCED_MODEL ? [PREVIOUS_BALANCED_MODEL] : []),
-  ];
+  const fallbackChain = Array.from(
+    new Set([primaryModel, FAST_MODEL, CHEAPEST_MODEL, STRONG_MODEL])
+  );
 
   let lastErr: unknown;
   let succeeded = false;
