@@ -1,14 +1,14 @@
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { AIModelPreference, OptionChoice } from '../types/exam';
-
-const FAST_MODEL = 'gemini-4-hydrogen';
-const STRONG_MODEL = 'gemini-3.8-flash';
-const ALLOWED_MODELS = new Set([
-  'gemini-4-hydrogen',
-  'gemini-3.5-flash-lite',
-  'gemini-3.6-flash',
-  'gemini-3.8-flash',
-]);
+import {
+  ALLOWED_MODEL_SET,
+  CHEAPEST_MODEL,
+  FAST_MODEL,
+  PREVIOUS_BALANCED_MODEL,
+  PREVIOUS_STRONG_MODEL,
+  STRONG_MODEL,
+  resolveAnswerKeyModel,
+} from './aiModels';
 
 export interface BrowserNormalizedBox {
   questionNumber: number;
@@ -153,7 +153,7 @@ export async function testConnectionInBrowser(
 ): Promise<{ success: boolean; model: string; latencyMs: number; reply?: string; error?: string }> {
   const start = Date.now();
   const targetModel =
-    model && model !== 'auto' && ALLOWED_MODELS.has(model) ? model : FAST_MODEL;
+    model && model !== 'auto' && ALLOWED_MODEL_SET.has(model) ? model : FAST_MODEL;
   try {
     const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
     const response = await ai.models.generateContent({
@@ -191,7 +191,7 @@ export async function detectQuestionsInBrowser(
   const isAuto = !modelPreference || modelPreference === 'auto';
   const primaryModel = isAuto
     ? FAST_MODEL
-    : ALLOWED_MODELS.has(modelPreference)
+    : ALLOWED_MODEL_SET.has(modelPreference)
     ? modelPreference
     : FAST_MODEL;
 
@@ -248,12 +248,12 @@ export async function detectQuestionsInBrowser(
   let escalated = false;
   let boxes: BrowserNormalizedBox[] = [];
 
-  // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹ (ترکیب هیدروژن و فلش ۳.۵ لایت + مدل قوی‌تر ۳.۸)
+  // ترتیب مدل‌های جایگزین در صورت خطای موقت ۵۰۳/۴۲۹
   const fallbackChain = [
     primaryModel,
-    ...(primaryModel !== 'gemini-3.5-flash-lite' ? ['gemini-3.5-flash-lite'] : []),
+    ...(primaryModel !== PREVIOUS_STRONG_MODEL ? [PREVIOUS_STRONG_MODEL] : []),
     ...(primaryModel !== STRONG_MODEL ? [STRONG_MODEL] : []),
-    ...(primaryModel !== 'gemini-3.6-flash' ? ['gemini-3.6-flash'] : []),
+    ...(primaryModel !== PREVIOUS_BALANCED_MODEL ? [PREVIOUS_BALANCED_MODEL] : []),
   ];
 
   let lastErr: unknown;
@@ -309,9 +309,10 @@ export async function extractAnswerKeyInBrowser(
     imagesBase64?: { mimeType: string; data: string }[];
     expectedCount?: number;
     model?: AIModelPreference;
+    includeExplanations?: boolean;
   }
 ): Promise<{ answers: Record<number, OptionChoice>; explanations: Record<number, string> }> {
-  const ai = new GoogleGenAI({ apiKey: params.model ? apiKey.trim() : apiKey.trim() });
+  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
 
   for (const img of params.imagesBase64 || []) {
@@ -321,21 +322,42 @@ export async function extractAnswerKeyInBrowser(
     }
   }
 
-  const countHint = params.expectedCount ? `تعداد کل سوالات حدود ${params.expectedCount} سوال است.` : '';
+  const includeExplanations = Boolean(params.includeExplanations);
+  const countHint = params.expectedCount
+    ? `تعداد کل سوالات این درس حدود ${params.expectedCount} سوال است.`
+    : '';
+
   parts.push({
-    text: `شما یک دستیار تخصصی استخراج کلید پاسخنامه آزمون‌های چهارگزینه‌ای کنکور و مدارس ایران هستید.
+    text: `تو یک استخراج‌کنندهٔ دقیق «کلید پاسخنامه» هستی و فقط دو چیز را برمی‌گردانی: شماره سوال و شماره گزینه صحیح (۱ تا ۴).
+
 ${countHint}
-از محتوای تصویر یا متن زیر، شماره هر سوال و گزینه صحیح آن (عددی بین 1 تا 4) را استخراج کنید.
-الف=1، ب=2، ج=3، د=4.
-${params.textInput ? `\nمتن ورودی کاربر:\n${params.textInput}` : ''}`,
+
+قواعد قطعی (حتی اگر پاسخنامه تشریحی و طولانی باشد):
+1) پاسخنامه ممکن است برای هر سوال تا دو صفحه توضیح، استدلال یا محاسبه داشته باشد. تو نباید متن تشریحی را بخوانی یا خلاصه کنی؛ فقط همان جمله/نشانه‌ای را پیدا کن که گزینه صحیح را اعلام می‌کند: «پاسخ: گزینه ۳»، «پاسخ صحیح: ب»، «گزینه درست: ۲»، تیک کنار یک گزینه، یا عبارت «درست است».
+2) برای هر سوال فقط یک رکورد با questionNumber و correctOption خروجی بده.
+3) حروف الف=۱، ب=۲، ج=۳، د=۴ (و A=1, B=2, C=3, D=4) و اعداد فارسی/عربی را به عدد ۱ تا ۴ تبدیل کن.
+4) اگر گزینه صحیح یک سوال قطعی نیست یا حذف/چندپاسخه است، آن سوال را نادیده بگیر و حدس نزن.
+5) هیچ توضیح، متن اضافه، مقدمه یا نتیجه‌گیری برنگردان.
+${includeExplanations ? '6) فقط برای هر سوال یک جمله خیلی کوتاه (حداکثر ۱۵ کلمه) به‌عنوان دلیل در فیلد explanation بنویس.' : '6) فیلد explanation را هرگز برنگردان.'}
+${params.textInput ? `\nمتن پاسخنامه/کلید:\n${params.textInput}` : ''}`,
   });
 
-  const isAuto = !params.model || params.model === 'auto';
-  const primaryModel = isAuto
-    ? FAST_MODEL
-    : ALLOWED_MODELS.has(params.model!)
-    ? params.model!
-    : FAST_MODEL;
+  const isAuto =
+    !params.model || params.model === 'auto' || !ALLOWED_MODEL_SET.has(params.model);
+  const primaryModel = resolveAnswerKeyModel(params.model);
+
+  const maxOutputTokens = Math.min(
+    2048,
+    Math.max(includeExplanations ? 600 : 256, (params.expectedCount || 40) * (includeExplanations ? 42 : 16))
+  );
+
+  const answerItemProperties: Record<string, unknown> = {
+    questionNumber: { type: Type.INTEGER },
+    correctOption: { type: Type.INTEGER },
+  };
+  if (includeExplanations) {
+    answerItemProperties.explanation = { type: Type.STRING };
+  }
 
   const callExtract = async (modelName: string, level: ThinkingLevel) => {
     const response = await ai.models.generateContent({
@@ -343,6 +365,7 @@ ${params.textInput ? `\nمتن ورودی کاربر:\n${params.textInput}` : ''
       contents: { parts },
       config: {
         thinkingConfig: { thinkingLevel: level },
+        maxOutputTokens,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -351,12 +374,10 @@ ${params.textInput ? `\nمتن ورودی کاربر:\n${params.textInput}` : ''
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
-                properties: {
-                  questionNumber: { type: Type.INTEGER },
-                  correctOption: { type: Type.INTEGER },
-                  explanation: { type: Type.STRING },
-                },
-                required: ['questionNumber', 'correctOption'],
+                properties: answerItemProperties,
+                required: includeExplanations
+                  ? ['questionNumber', 'correctOption', 'explanation']
+                  : ['questionNumber', 'correctOption'],
               },
             },
           },
@@ -368,17 +389,26 @@ ${params.textInput ? `\nمتن ورودی کاربر:\n${params.textInput}` : ''
     return Array.isArray(parsed.answers) ? parsed.answers : [];
   };
 
-  let rawAnswers = [];
-  try {
-    rawAnswers = await callExtract(primaryModel, ThinkingLevel.LOW);
-    if (isAuto && rawAnswers.length === 0) {
-      rawAnswers = await callExtract(STRONG_MODEL, ThinkingLevel.MEDIUM);
-    }
-  } catch (err) {
-    if (isAuto && primaryModel !== STRONG_MODEL) {
-      rawAnswers = await callExtract(STRONG_MODEL, ThinkingLevel.MEDIUM);
-    } else {
-      throw new Error(formatError(err));
+  const chain = Array.from(
+    new Set(isAuto ? [CHEAPEST_MODEL, FAST_MODEL, STRONG_MODEL] : [primaryModel, FAST_MODEL, STRONG_MODEL])
+  );
+
+  let rawAnswers: Array<{ questionNumber?: number; correctOption?: number; explanation?: string }> = [];
+  let lastErr: unknown;
+  for (let idx = 0; idx < chain.length; idx++) {
+    const modelName = chain[idx];
+    const level =
+      modelName === STRONG_MODEL || modelName === FAST_MODEL
+        ? ThinkingLevel.MEDIUM
+        : ThinkingLevel.LOW;
+    try {
+      rawAnswers = await withTransientRetry(() => callExtract(modelName, level), 1);
+      if (rawAnswers.length > 0) break;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientError(err) && idx === chain.length - 1) {
+        throw new Error(formatError(err));
+      }
     }
   }
 
@@ -389,8 +419,16 @@ ${params.textInput ? `\nمتن ورودی کاربر:\n${params.textInput}` : ''
     const opt = Number(item.correctOption);
     if (qNum >= 1 && (opt === 1 || opt === 2 || opt === 3 || opt === 4)) {
       answers[qNum] = opt as OptionChoice;
-      if (item.explanation) explanations[qNum] = String(item.explanation);
+      if (includeExplanations && item.explanation) explanations[qNum] = String(item.explanation);
     }
   }
+
+  if (Object.keys(answers).length === 0) {
+    const reason = lastErr ? ` (${formatError(lastErr)})` : '';
+    throw new Error(
+      `هیچ کلید پاسخی در محتوای انتخاب‌شده پیدا نشد${reason}. محدوده صفحه را بررسی کنید یا از تب «از متن» / جدول دستی استفاده کنید.`
+    );
+  }
+
   return { answers, explanations };
 }

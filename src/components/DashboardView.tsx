@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   Trash2,
   Play,
+  RotateCcw,
   TrendingUp,
   BookOpen,
   Clock,
@@ -18,12 +19,14 @@ import {
   formatFarsiPercent,
 } from '../utils/farsi';
 import { computeSubjectProgress } from '../utils/scoring';
+import { getAttemptSummary } from '../utils/examAttempts';
 
 interface DashboardViewProps {
   exams: ExamSession[];
   onStartNewExam: () => void;
   onOpenAIExtractor: () => void;
   onOpenAnalytics: () => void;
+  onRetakeExam?: (exam: ExamSession) => void;
   onSelectExam: (exam: ExamSession) => void;
   onDeleteExam: (examId: string) => void;
 }
@@ -33,6 +36,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onStartNewExam,
   onOpenAIExtractor,
   onOpenAnalytics,
+  onRetakeExam,
   onSelectExam,
   onDeleteExam,
 }) => {
@@ -225,6 +229,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="divide-y divide-slate-100">
             {exams.slice(0, 6).map((exam) => {
               const isCompleted = exam.status === 'completed' && exam.scoreSummary;
+              const attempt = getAttemptSummary(exams, exam);
               const displayPct = isCompleted
                 ? exam.hasNegativeMarking
                   ? exam.scoreSummary!.netPercentage
@@ -247,6 +252,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </h3>
                       {exam.subject && (
                         <span className="text-xs text-slate-400">· {exam.subject}</span>
+                      )}
+                      {attempt.total > 1 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 tabular-farsi">
+                          تلاش {toFarsiDigits(attempt.current)} از {toFarsiDigits(attempt.total)}
+                        </span>
                       )}
                     </div>
                     <div className="text-xs text-slate-500 tabular-farsi">
@@ -292,6 +302,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     )}
 
                     <div className="flex items-center gap-1">
+                      {isCompleted && onRetakeExam && (
+                        <button
+                          type="button"
+                          onClick={() => onRetakeExam(exam)}
+                          aria-label={`برگزاری مجدد ${exam.title}`}
+                          title="برگزاری مجدد آزمون"
+                          className="p-2 rounded-lg text-slate-400 hover:text-[#6338F9] hover:bg-[#F3EEFF] transition-colors cursor-pointer"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => onSelectExam(exam)}

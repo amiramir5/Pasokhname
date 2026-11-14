@@ -11,6 +11,7 @@ import {
   Sparkles,
   Loader2,
   Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { ExamSession, OptionChoice } from '../types/exam';
 import {
@@ -30,6 +31,8 @@ import {
 interface ReportCardViewProps {
   exam: ExamSession;
   optionLabelStyle: 'numeric' | 'alphabetic';
+  attemptSummary?: { current: number; total: number; latestId?: string };
+  onRetakeExam?: () => void;
   onUpdateExamWithRecalculatedScore: (updated: ExamSession) => void;
   onBackToDashboard: () => void;
 }
@@ -37,6 +40,8 @@ interface ReportCardViewProps {
 export const ReportCardView: React.FC<ReportCardViewProps> = ({
   exam,
   optionLabelStyle,
+  attemptSummary,
+  onRetakeExam,
   onUpdateExamWithRecalculatedScore,
   onBackToDashboard,
 }) => {
@@ -97,7 +102,7 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
     try {
       let imagesPayload: { mimeType: string; data: string }[] = [];
       if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        const pages = await renderPdfFileToImages(file, 4, 1.6);
+        const pages = await renderPdfFileToImages(file, 8, 1.45);
         imagesPayload = pages.map((p) => ({ mimeType: 'image/jpeg', data: p.dataUrl }));
       } else {
         const page = await loadImageFileToRenderedPage(file, 1);
@@ -137,7 +142,7 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
   return (
     <div className="space-y-6">
       {/* نوار بالای کارنامه */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
           onClick={onBackToDashboard}
@@ -147,18 +152,37 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
           <span>بازگشت به داشبورد</span>
         </button>
 
-        <button
-          type="button"
-          onClick={() => setShowKeyEditor((v) => !v)}
-          className="px-4 py-2 rounded-xl bg-[#F3EEFF] hover:bg-[#6338F9] text-[#6338F9] hover:text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
-        >
-          <KeyRound className="w-4 h-4" />
-          <span>
-            {showKeyEditor
-              ? 'بستن بخش ویرایش کلید پاسخنامه'
-              : `ویرایش / ورود کلید پاسخنامه (${toFarsiDigits(keyedQuestionsCount)} از ${toFarsiDigits(exam.questionCount)})`}
-          </span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {attemptSummary && attemptSummary.total > 1 && (
+            <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold tabular-farsi">
+              تلاش {toFarsiDigits(attemptSummary.current)} از {toFarsiDigits(attemptSummary.total)}
+            </span>
+          )}
+
+          {onRetakeExam && (
+            <button
+              type="button"
+              onClick={onRetakeExam}
+              className="px-4 py-2 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>برگزاری مجدد این آزمون</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setShowKeyEditor((v) => !v)}
+            className="px-4 py-2 rounded-xl bg-[#F3EEFF] hover:bg-[#6338F9] text-[#6338F9] hover:text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <KeyRound className="w-4 h-4" />
+            <span>
+              {showKeyEditor
+                ? 'بستن بخش ویرایش کلید پاسخنامه'
+                : `ویرایش / ورود کلید پاسخنامه (${toFarsiDigits(keyedQuestionsCount)} از ${toFarsiDigits(exam.questionCount)})`}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* هدر مشخصات کارنامه آزمون */}

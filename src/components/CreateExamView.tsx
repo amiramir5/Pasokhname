@@ -41,6 +41,7 @@ import {
   testGeminiConnection,
   getStoredGeminiApiKey,
 } from '../utils/pdfAndVision';
+import { PdfPagePicker } from './PdfPagePicker';
 
 interface CreateExamViewProps {
   initialFocusMode?: 'form' | 'ai_key' | 'ai_slicer';
@@ -118,6 +119,14 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
   } | null>(null);
   const [showManualKeyGrid, setShowManualKeyGrid] = useState<boolean>(false);
 
+  // پیش‌نمایش PDF و انتخاب محدوده صفحه برای استخراج پاسخنامه و برش سوالات
+  const [keyPdfFile, setKeyPdfFile] = useState<File | null>(null);
+  const [keySelectedPages, setKeySelectedPages] = useState<number[]>([]);
+  const [keyIncludeExplanations, setKeyIncludeExplanations] = useState<boolean>(false);
+  const [slicerPdfFile, setSlicerPdfFile] = useState<File | null>(null);
+  const [slicerSelectedPages, setSlicerSelectedPages] = useState<number[]>([]);
+  const [isPreparingKey, setIsPreparingKey] = useState<boolean>(false);
+
   // برش هوشمند سوالات با بینایی ماشین
   const [renderedPages, setRenderedPages] = useState<RenderedPageImage[]>([]);
   const [detectedBoxes, setDetectedBoxes] = useState<BoundingBoxQuestion[]>([]);
@@ -184,56 +193,110 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
   const questionCount = Math.max(1, Math.min(200, parseFarsiInt(questionCountStr, 20)));
   const durationMinutes = Math.max(1, Math.min(360, parseFarsiInt(durationStr, 20)));
 
+  // اعمال نتیجه استخراج کلید روی فرم
+  const applyExtractedKey = (
+    result: { answers: Record<number, OptionChoice>; explanations: Record<number, string> },
+    sourceLabel: string
+  ) => {
+    const count = Object.keys(result.answers).length;
+    if (count === 0) {
+      setKeyStatusMessage({
+        type: 'error',
+        text: 'کلیدی در این محتوا یافت نشد. می‌توانید از تب «از متن» یا جدول دستی استفاده کنید.',
+      });
+      return;
+    }
+    setAnswerKey((prev) => ({ ...prev, ...result.answers }));
+    setExplanations((prev) => ({ ...prev, ...result.explanations }));
+    if (count > questionCount) {
+      setQuestionCountStr(toFarsiDigits(count));
+    }
+    setShowManualKeyGrid(true);
+    setKeyStatusMessage({
+      type: 'success',
+      text: `کلید ${toFarsiDigits(count)} سوال ${sourceLabel} استخراج شد.`,
+    });
+  };
+
   // پردازش آپلود فایل PDF یا تصویر برای استخراج کلید پاسخنامه
   const handleKeyFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setKeyStatusMessage(null);
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (isPdf) {
+      // برای PDF ابتدا پیش‌نمایش صفحات نمایش داده می‌شود تا کاربر محدوده درس را انتخاب کند
+      setKeyPdfFile(file);
+      setKeySelectedPages([]);
+      setKeyStatusMessage({
+        type: 'info',
+        text: 'پیش‌نمایش صفحات آماده می‌شود. محدوده صفحات همان درس را انتخاب کنید و سپس دکمه «استخراج کلید» را بزنید.',
+      });
+      e.target.value = '';
+      return;
+    }
 
     setIsExtractingKey(true);
     setKeyStatusMessage({
       type: 'info',
-      text: `در حال پردازش فایل «${file.name}» و استخراج کلید با هوش مصنوعی...`,
+      text: `در حال پردازش تصویر «${file.name}» و استخراج کلید با هوش مصنوعی...`,
     });
 
     try {
-      let imagesPayload: { mimeType: string; data: string }[] = [];
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        const pages = await renderPdfFileToImages(file, 4, 1.6);
-        imagesPayload = pages.map((p) => ({ mimeType: 'image/jpeg', data: p.dataUrl }));
-      } else {
-        const page = await loadImageFileToRenderedPage(file, 1);
-        imagesPayload = [{ mimeType: 'image/jpeg', data: page.dataUrl }];
-      }
-
+      const page = await loadImageFileToRenderedPage(file, 1);
       const result = await extractAnswerKeyWithAI({
-        imagesBase64: imagesPayload,
+        imagesBase64: [{ mimeType: 'image/jpeg', data: page.dataUrl }],
         expectedCount: questionCount,
+        includeExplanations: keyIncludeExplanations,
       });
-
-      const count = Object.keys(result.answers).length;
-      if (count > 0) {
-        setAnswerKey((prev) => ({ ...prev, ...result.answers }));
-        setExplanations((prev) => ({ ...prev, ...result.explanations }));
-        if (count > questionCount) {
-          setQuestionCountStr(toFarsiDigits(count));
-        }
-        setShowManualKeyGrid(true);
-        setKeyStatusMessage({
-          type: 'success',
-          text: `کلید ${toFarsiDigits(count)} سوال با موفقیت توسط هوش مصنوعی استخراج شد.`,
-        });
-      } else {
-        setKeyStatusMessage({
-          type: 'error',
-          text: 'کلیدی در این فایل یافت نشد. می‌توانید از تب «از متن» یا جدول دستی استفاده کنید.',
-        });
-      }
+      applyExtractedKey(result, 'با هوش مصنوعی از تصویر');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'خطا در استخراج پاسخنامه';
       setKeyStatusMessage({ type: 'error', text: msg });
     } finally {
       setIsExtractingKey(false);
       e.target.value = '';
+    }
+  };
+
+  // استخراج کلید فقط از محدوده صفحات انتخاب‌شده (صرفه‌جویی در توکن)
+  const handleExtractKeyFromSelectedPages = async () => {
+    if (!keyPdfFile) return;
+    if (keySelectedPages.length === 0) {
+      setKeyStatusMessage({ type: 'error', text: 'حداقل یک صفحه از PDF را انتخاب کنید.' });
+      return;
+    }
+
+    setIsPreparingKey(true);
+    setIsExtractingKey(true);
+    setKeyStatusMessage({
+      type: 'info',
+      text: `در حال رندر ${toFarsiDigits(keySelectedPages.length)} صفحه انتخاب‌شده و استخراج کلید...`,
+    });
+
+    try {
+      const pages = await renderPdfFileToImages(
+        keyPdfFile,
+        keySelectedPages.length,
+        1.45,
+        keySelectedPages
+      );
+      if (pages.length === 0) {
+        throw new Error('صفحه‌های انتخاب‌شده قابل خواندن نبودند.');
+      }
+      const result = await extractAnswerKeyWithAI({
+        imagesBase64: pages.map((p) => ({ mimeType: 'image/jpeg', data: p.dataUrl })),
+        expectedCount: questionCount,
+        includeExplanations: keyIncludeExplanations,
+      });
+      applyExtractedKey(result, 'از محدوده صفحات انتخاب‌شده');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'خطا در استخراج پاسخنامه';
+      setKeyStatusMessage({ type: 'error', text: msg });
+    } finally {
+      setIsPreparingKey(false);
+      setIsExtractingKey(false);
     }
   };
 
@@ -267,6 +330,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
       const aiResult = await extractAnswerKeyWithAI({
         textInput: rawKeyText,
         expectedCount: questionCount,
+        includeExplanations: keyIncludeExplanations,
       });
       const aiCount = Object.keys(aiResult.answers).length;
       if (aiCount > 0) {
@@ -309,10 +373,96 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
     }
   };
 
+  // تشخیص و برش سوالات روی صفحات رندرشده (مشترک بین آپلود مستقیم و محدوده انتخاب‌شده)
+  const runQuestionSlicing = async (allPages: RenderedPageImage[]) => {
+    setRenderedPages(allPages);
+    const allBoxes: BoundingBoxQuestion[] = [];
+    const usedNumbers = new Set<number>();
+    let nextQNum = 1;
+    let fallbackPagesCount = 0;
+    let lastFallbackError: string | undefined;
+    let lastModelUsed: string | undefined;
+    let anyEscalated = false;
+    const failedIndices: number[] = [];
+
+    for (let pIdx = 0; pIdx < allPages.length; pIdx++) {
+      const { boxes, usedFallback, errorReason, modelUsed, escalated } =
+        await detectQuestionsOnPageWithAI(allPages[pIdx], pIdx, nextQNum);
+
+      if (usedFallback) {
+        fallbackPagesCount++;
+        failedIndices.push(pIdx);
+        if (errorReason) lastFallbackError = errorReason;
+      }
+      if (modelUsed) lastModelUsed = modelUsed;
+      if (escalated) anyEscalated = true;
+
+      for (const b of boxes) {
+        // حفظ شماره سوال واقعی تشخیص‌داده‌شده توسط AI در صورت معتبر و یکتا بودن
+        let assignedNum = b.questionNumber;
+        if (!assignedNum || assignedNum < 1 || usedNumbers.has(assignedNum)) {
+          while (usedNumbers.has(nextQNum)) nextQNum++;
+          assignedNum = nextQNum;
+        }
+        usedNumbers.add(assignedNum);
+        nextQNum = Math.max(nextQNum, assignedNum + 1);
+        allBoxes.push({ ...b, questionNumber: assignedNum });
+      }
+    }
+
+    setFallbackPageIndices(failedIndices);
+    setDetectedBoxes(allBoxes);
+    if (allBoxes.length > 0) {
+      setSelectedBoxId(allBoxes[0].id);
+      setQuestionCountStr(toFarsiDigits(Math.max(questionCount, allBoxes.length)));
+      if (fallbackPagesCount > 0) {
+        setSlicerStatus({
+          type: 'error',
+          text: `هشدار: هوش مصنوعی در ${toFarsiDigits(
+            fallbackPagesCount
+          )} صفحه با خطا مواجه شد (${
+            lastFallbackError || 'خطای موقت سرور'
+          }) و آن صفحه با روش جایگزین برش خورد.`,
+        });
+      } else {
+        const modelNote = lastModelUsed
+          ? ` (مدل: ${lastModelUsed}${anyEscalated ? ' · ارتقای هوشمند فعال شد' : ''})`
+          : '';
+        setSlicerStatus({
+          type: 'success',
+          text: `${toFarsiDigits(allBoxes.length)} سوال به صورت خودکار تشخیص داده شد و برش خورد!${modelNote} می‌توانید کادر هر سوال را بازبینی یا تنظیم کنید.`,
+        });
+      }
+    } else {
+      setSlicerStatus({
+        type: 'error',
+        text:
+          lastFallbackError ||
+          'سوالی به صورت خودکار تفکیک نشد. می‌توانید با دکمه «افزودن باکس برش» کادر سوال را مشخص کنید.',
+      });
+    }
+  };
+
   // پردازش آپلود فایل PDF یا تصویر سوالات جهت برش خودکار هر سوال (Question Slicer)
   const handleQuestionSlicerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+
+    const first = files[0];
+    const isPdf =
+      first.type === 'application/pdf' || first.name.toLowerCase().endsWith('.pdf');
+
+    // برای PDF تک‌فایلی، ابتدا پیش‌نمایش و انتخاب محدوده صفحه
+    if (isPdf && files.length === 1) {
+      setSlicerPdfFile(first);
+      setSlicerSelectedPages([]);
+      setSlicerStatus({
+        type: 'info',
+        text: 'پیش‌نمایش صفحات PDF آماده می‌شود. محدوده صفحات همان درس را انتخاب و سپس «برش صفحات انتخاب‌شده» را بزنید.',
+      });
+      e.target.value = '';
+      return;
+    }
 
     setIsSlicingQuestions(true);
     setSlicerStatus({
@@ -332,79 +482,47 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
           allPages.push(imgPage);
         }
       }
-
-      setRenderedPages(allPages);
-      const allBoxes: BoundingBoxQuestion[] = [];
-      const usedNumbers = new Set<number>();
-      let nextQNum = 1;
-      let fallbackPagesCount = 0;
-      let lastFallbackError: string | undefined;
-      let lastModelUsed: string | undefined;
-      let anyEscalated = false;
-      const failedIndices: number[] = [];
-
-      for (let pIdx = 0; pIdx < allPages.length; pIdx++) {
-        const { boxes, usedFallback, errorReason, modelUsed, escalated } =
-          await detectQuestionsOnPageWithAI(allPages[pIdx], pIdx, nextQNum);
-
-        if (usedFallback) {
-          fallbackPagesCount++;
-          failedIndices.push(pIdx);
-          if (errorReason) lastFallbackError = errorReason;
-        }
-        if (modelUsed) lastModelUsed = modelUsed;
-        if (escalated) anyEscalated = true;
-
-        for (const b of boxes) {
-          // حفظ شماره سوال واقعی تشخیص‌داده‌شده توسط AI در صورت معتبر و یکتا بودن
-          let assignedNum = b.questionNumber;
-          if (!assignedNum || assignedNum < 1 || usedNumbers.has(assignedNum)) {
-            while (usedNumbers.has(nextQNum)) nextQNum++;
-            assignedNum = nextQNum;
-          }
-          usedNumbers.add(assignedNum);
-          nextQNum = Math.max(nextQNum, assignedNum + 1);
-          allBoxes.push({ ...b, questionNumber: assignedNum });
-        }
-      }
-
-      setFallbackPageIndices(failedIndices);
-      setDetectedBoxes(allBoxes);
-      if (allBoxes.length > 0) {
-        setSelectedBoxId(allBoxes[0].id);
-        setQuestionCountStr(toFarsiDigits(Math.max(questionCount, allBoxes.length)));
-        if (fallbackPagesCount > 0) {
-          setSlicerStatus({
-            type: 'error',
-            text: `هشدار: هوش مصنوعی در ${toFarsiDigits(
-              fallbackPagesCount
-            )} صفحه با خطا مواجه شد (${
-              lastFallbackError || 'خطای موقت سرور'
-            }) و آن صفحه با روش جایگزین برش خورد.`,
-          });
-        } else {
-          const modelNote = lastModelUsed
-            ? ` (مدل: ${lastModelUsed}${anyEscalated ? ' · ارتقای هوشمند فعال شد' : ''})`
-            : '';
-          setSlicerStatus({
-            type: 'success',
-            text: `${toFarsiDigits(allBoxes.length)} سوال به صورت خودکار تشخیص داده شد و برش خورد!${modelNote} می‌توانید کادر هر سوال را بازبینی یا تنظیم کنید.`,
-          });
-        }
-      } else {
-        setSlicerStatus({
-          type: 'error',
-          text:
-            lastFallbackError ||
-            'سوالی به صورت خودکار تفکیک نشد. می‌توانید با دکمه «افزودن باکس برش» کادر سوال را مشخص کنید.',
-        });
-      }
+      setSlicerPdfFile(null);
+      await runQuestionSlicing(allPages);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'خطا در برش فایل سوالات';
       setSlicerStatus({ type: 'error', text: msg });
     } finally {
       setIsSlicingQuestions(false);
       e.target.value = '';
+    }
+  };
+
+  // برش فقط محدوده صفحات انتخاب‌شده از PDF سوالات
+  const handleSliceSelectedPages = async () => {
+    if (!slicerPdfFile) return;
+    if (slicerSelectedPages.length === 0) {
+      setSlicerStatus({ type: 'error', text: 'حداقل یک صفحه از PDF را انتخاب کنید.' });
+      return;
+    }
+
+    setIsSlicingQuestions(true);
+    setSlicerStatus({
+      type: 'info',
+      text: `در حال رندر و برش ${toFarsiDigits(slicerSelectedPages.length)} صفحه انتخاب‌شده با بینایی ماشین...`,
+    });
+
+    try {
+      const pages = await renderPdfFileToImages(
+        slicerPdfFile,
+        slicerSelectedPages.length,
+        1.8,
+        slicerSelectedPages
+      );
+      if (pages.length === 0) {
+        throw new Error('صفحه‌های انتخاب‌شده قابل خواندن نبودند.');
+      }
+      await runQuestionSlicing(pages);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'خطا در برش صفحات انتخاب‌شده';
+      setSlicerStatus({ type: 'error', text: msg });
+    } finally {
+      setIsSlicingQuestions(false);
     }
   };
 
@@ -966,38 +1084,91 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                 </div>
               )}
 
+              {/* سوییچ استخراج توضیح (پیش‌فرض خاموش برای صرفه‌جویی در توکن) */}
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="space-y-0.5">
+                  <p className="text-xs font-semibold text-slate-800">
+                    استخراج توضیح برای هر سوال
+                  </p>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    خاموش بماند تا فقط گزینه صحیح استخراج شود و توکن کمتری مصرف گردد.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={keyIncludeExplanations}
+                  onClick={() => setKeyIncludeExplanations((v) => !v)}
+                  className={`shrink-0 w-11 h-6 rounded-full transition-colors p-0.5 flex items-center cursor-pointer ${
+                    keyIncludeExplanations ? 'bg-[#6338F9] justify-start' : 'bg-slate-300 justify-end'
+                  }`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-white shadow-xs block" />
+                </button>
+              </div>
+
               {/* محتوای هر تب */}
               {keySourceTab === 'file' && (
-                <div className="border-2 border-dashed border-[#D5C8FF] bg-[#FAF8FF] rounded-2xl p-8 text-center space-y-4">
-                  <input
-                    ref={keyFileInputRef}
-                    type="file"
-                    accept=".pdf,application/pdf,image/*"
-                    onChange={handleKeyFileUpload}
-                    className="hidden"
-                  />
-                  <div className="w-14 h-14 rounded-2xl bg-[#EDE7FF] text-[#6338F9] flex items-center justify-center mx-auto">
-                    <FileText className="w-7 h-7" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-bold text-slate-800">
-                      فایل پاسخنامه (PDF یا تصویر) خود را انتخاب کنید
+                <div className="space-y-4">
+                  <div className="border-2 border-dashed border-[#D5C8FF] bg-[#FAF8FF] rounded-2xl p-8 text-center space-y-4">
+                    <input
+                      ref={keyFileInputRef}
+                      type="file"
+                      accept=".pdf,application/pdf,image/*"
+                      onChange={handleKeyFileUpload}
+                      className="hidden"
+                    />
+                    <div className="w-14 h-14 rounded-2xl bg-[#EDE7FF] text-[#6338F9] flex items-center justify-center mx-auto">
+                      <FileText className="w-7 h-7" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold text-slate-800">
+                        فایل پاسخنامه (PDF یا تصویر) خود را انتخاب کنید
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        بعد از انتخاب PDF، پیش‌نمایش همه صفحات نمایش داده می‌شود تا فقط محدوده همان درس را انتخاب کنید.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isExtractingKey}
+                      onClick={() => keyFileInputRef.current?.click()}
+                      className="px-6 py-2.5 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                    >
+                      {isExtractingKey ? 'در حال استخراج با هوش مصنوعی...' : 'انتخاب فایل'}
+                    </button>
+                    <p className="text-[11px] text-slate-400">
+                      پشتیبانی از PDF، JPG، PNG
                     </p>
-                    <p className="text-xs text-slate-500">
-                      PDF با کیفیت بالا برای بهترین نتیجه در استخراج خودکار کلید سوالات
-                    </p>
                   </div>
-                  <button
-                    type="button"
-                    disabled={isExtractingKey}
-                    onClick={() => keyFileInputRef.current?.click()}
-                    className="px-6 py-2.5 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
-                  >
-                    {isExtractingKey ? 'در حال استخراج با هوش مصنوعی...' : 'انتخاب فایل'}
-                  </button>
-                  <p className="text-[11px] text-slate-400">
-                    پشتیبانی از PDF، JPG، PNG
-                  </p>
+
+                  {keyPdfFile && (
+                    <>
+                      <PdfPagePicker
+                        file={keyPdfFile}
+                        hint="مثلاً اگر فایل هر ۴ درس تخصصی را دارد و فقط پاسخنامه زیست را می‌خواهید، از روی تامبنیل‌ها محدوده صفحات زیست را پیدا و انتخاب کنید. فقط همین صفحات برای هوش مصنوعی ارسال می‌شود."
+                        onSelectionChange={setKeySelectedPages}
+                      />
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <span className="text-[11px] text-slate-600 tabular-farsi">
+                          {toFarsiDigits(keySelectedPages.length)} صفحه آماده ارسال به هوش مصنوعی
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isExtractingKey || isPreparingKey || keySelectedPages.length === 0}
+                          onClick={handleExtractKeyFromSelectedPages}
+                          className="px-4 py-2.5 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                        >
+                          {isExtractingKey ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-4 h-4" />
+                          )}
+                          <span>استخراج کلید از صفحات انتخاب‌شده</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1222,6 +1393,34 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                     <span>تست برش هوشمند با برگه نمونه ۵ سوالی</span>
                   </button>
                 </div>
+
+                {slicerPdfFile && (
+                  <div className="space-y-3 pt-1">
+                    <PdfPagePicker
+                      file={slicerPdfFile}
+                      hint="از روی تامبنیل‌ها محدوده صفحات همان درس را پیدا کنید (مثلاً زیست‌شناسی)، انتخاب کنید و سپس دکمه برش را بزنید. فقط همین صفحات پردازش می‌شوند."
+                      onSelectionChange={setSlicerSelectedPages}
+                    />
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <span className="text-[11px] text-slate-600 tabular-farsi">
+                        {toFarsiDigits(slicerSelectedPages.length)} صفحه انتخاب شده
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isSlicingQuestions || slicerSelectedPages.length === 0}
+                        onClick={handleSliceSelectedPages}
+                        className="px-4 py-2.5 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                      >
+                        {isSlicingQuestions ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Scissors className="w-4 h-4" />
+                        )}
+                        <span>برش صفحات انتخاب‌شده</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {slicerStatus && (
@@ -1293,7 +1492,7 @@ export const CreateExamView: React.FC<CreateExamViewProps> = ({
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-xs font-bold text-[#6338F9] tabular-farsi">
                                 باکس سوال {toFarsiDigits(box.questionNumber)} (صفحه{' '}
-                                {toFarsiDigits(box.pageIndex + 1)})
+                                {toFarsiDigits(renderedPages[box.pageIndex]?.pageNumber ?? box.pageIndex + 1)})
                               </span>
                               <button
                                 type="button"

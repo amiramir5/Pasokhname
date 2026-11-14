@@ -1,7 +1,9 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { PDFDocument } from 'pdf-lib';
 import { AIModelPreference, BoundingBoxQuestion, OptionChoice } from '../types/exam';
 import { toFarsiDigits, fromFarsiDigits } from './farsi';
+import { FAST_MODEL } from './aiModels';
 import {
   testConnectionInBrowser,
   detectQuestionsInBrowser,
@@ -63,16 +65,16 @@ export async function fetchAIStatus(): Promise<{
   try {
     const res = await fetch('/api/ai/status');
     if (!res.ok) {
-      return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-4-hydrogen' };
+      return { hasServerKey: false, hasBrowserKey, defaultModel: FAST_MODEL };
     }
     const data = await res.json();
     return {
       hasServerKey: Boolean(data.hasServerKey),
       hasBrowserKey,
-      defaultModel: data.defaultModel || 'gemini-4-hydrogen',
+      defaultModel: data.defaultModel || FAST_MODEL,
     };
   } catch {
-    return { hasServerKey: false, hasBrowserKey, defaultModel: 'gemini-4-hydrogen' };
+    return { hasServerKey: false, hasBrowserKey, defaultModel: FAST_MODEL };
   }
 }
 
@@ -125,8 +127,7 @@ export async function testGeminiConnection(
   error?: string;
 }> {
   const effectiveKey = (apiKey ?? getStoredGeminiApiKey()).trim();
-  const targetModel =
-    !model || model === 'auto' ? 'gemini-4-hydrogen' : model;
+  const targetModel = !model || model === 'auto' ? FAST_MODEL : model;
   try {
     const res = await fetch('/api/ai/test-connection', {
       method: 'POST',
@@ -266,21 +267,37 @@ async function extractPdfTextQuestionBoxes(
 }
 
 /**
- * تبدیل صفحات فایل PDF به تصاویر باکیفیت روی Canvas
+ * تبدیل صفحات فایل PDF به تصاویر باکیفیت روی Canvas.
+ * در صورت ارسال pageNumbers فقط همان صفحات (مثلاً محدوده درس زیست) رندر می‌شوند
+ * تا هم زمان پردازش و هم مصرف توکن هوش مصنوعی کاهش یابد.
  */
 export async function renderPdfFileToImages(
   file: File,
   maxPages = 8,
-  scale = 1.8
+  scale = 1.8,
+  pageNumbers?: number[]
 ): Promise<RenderedPageImage[]> {
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   const pdfDoc = await loadingTask.promise;
-  const numPages = Math.min(pdfDoc.numPages, maxPages);
+
+  let targetPages: number[];
+  const requested = (pageNumbers || [])
+    .map((n) => Math.floor(n))
+    .filter((n) => n >= 1 && n <= pdfDoc.numPages);
+  if (requested.length > 0) {
+    targetPages = Array.from(new Set(requested)).sort((a, b) => a - b);
+  } else {
+    targetPages = Array.from(
+      { length: Math.min(pdfDoc.numPages, Math.max(1, maxPages)) },
+      (_, idx) => idx + 1
+    );
+  }
+
   const pages: RenderedPageImage[] = [];
 
-  for (let i = 1; i <= numPages; i++) {
-    const page = await pdfDoc.getPage(i);
+  for (const pageNum of targetPages) {
+    const page = await pdfDoc.getPage(pageNum);
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -298,10 +315,10 @@ export async function renderPdfFileToImages(
       canvas,
     }).promise;
 
-    const textBoxes = await extractPdfTextQuestionBoxes(page, viewport, i - 1);
+    const textBoxes = await extractPdfTextQuestionBoxes(page, viewport, pageNum - 1);
 
     pages.push({
-      pageNumber: i,
+      pageNumber: pageNum,
       dataUrl: canvas.toDataURL('image/jpeg', 0.9),
       width: canvas.width,
       height: canvas.height,
@@ -310,7 +327,123 @@ export async function renderPdfFileToImages(
     page.cleanup();
   }
 
+  await loadingTask.destroy();
   return pages;
+}
+
+/** تعداد کل صفحات یک فایل PDF */
+export async function getPdfPageCount(file: File): Promise<number> {
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdfDoc = await loadingTask.promise;
+  const count = pdfDoc.numPages;
+  await loadingTask.destroy();
+  return count;
+}
+
+/**
+ * ساخت تامبنیل کم‌حجم از تمام صفحات PDF برای پیش‌نمایش و انتخاب محدوده
+ */
+export async function renderPdfThumbnails(
+  file: File,
+  maxPages = 150,
+  thumbWidth = 170,
+  onProgress?: (rendered: number, total: number) => void
+): Promise<RenderedPageImage[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdfDoc = await loadingTask.promise;
+  const total = Math.min(pdfDoc.numPages, maxPages);
+  const thumbs: RenderedPageImage[] = [];
+
+  for (let i = 1; i <= total; i++) {
+    try {
+      const page = await pdfDoc.getPage(i);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(1, Math.max(0.15, thumbWidth / baseViewport.width));
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+
+      canvas.width = Math.max(1, Math.floor(viewport.width));
+      canvas.height = Math.max(1, Math.floor(viewport.height));
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+
+      thumbs.push({
+        pageNumber: i,
+        dataUrl: canvas.toDataURL('image/jpeg', 0.72),
+        width: canvas.width,
+        height: canvas.height,
+      });
+      page.cleanup();
+    } catch (err) {
+      console.warn(`Could not render PDF thumbnail for page ${i}:`, err);
+    }
+    onProgress?.(i, total);
+  }
+
+  await loadingTask.destroy();
+  return thumbs;
+}
+
+/**
+ * برش فایل PDF به محدوده صفحات انتخاب‌شده و ساخت فایل جدید قابل دانلود
+ */
+export async function exportPdfPageRange(
+  file: File,
+  pageNumbers: number[]
+): Promise<{ blob: Blob; suggestedName: string; pageCount: number }> {
+  const wanted = Array.from(
+    new Set(pageNumbers.map((n) => Math.floor(n)).filter((n) => n >= 1))
+  ).sort((a, b) => a - b);
+  if (wanted.length === 0) {
+    throw new Error('حداقل یک صفحه را برای برش انتخاب کنید.');
+  }
+
+  const bytes = await file.arrayBuffer();
+  const source = await PDFDocument.load(bytes);
+  const indices = wanted
+    .map((n) => n - 1)
+    .filter((idx) => idx >= 0 && idx < source.getPageCount());
+  if (indices.length === 0) {
+    throw new Error('صفحه‌های انتخاب‌شده در این فایل وجود ندارند.');
+  }
+
+  const target = await PDFDocument.create();
+  const copied = await target.copyPages(source, indices);
+  copied.forEach((page) => target.addPage(page));
+  const outBytes = await target.save();
+
+  const baseName = file.name.replace(/\.pdf$/i, '') || 'pasokhname';
+  const rangeLabel =
+    indices.length === 1
+      ? `p${indices[0] + 1}`
+      : `p${indices[0] + 1}-p${indices[indices.length - 1] + 1}`;
+
+  return {
+    blob: new Blob([outBytes as BlobPart], { type: 'application/pdf' }),
+    suggestedName: `${baseName}-${rangeLabel}.pdf`,
+    pageCount: indices.length,
+  };
+}
+
+/** دانلود خروجی برش‌خورده PDF در مرورگر */
+export async function downloadPdfPageRange(file: File, pageNumbers: number[]): Promise<number> {
+  const { blob, suggestedName, pageCount } = await exportPdfPageRange(file, pageNumbers);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = suggestedName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return pageCount;
 }
 
 /**
@@ -668,6 +801,8 @@ export async function extractAnswerKeyWithAI(params: {
   imagesBase64?: { mimeType: string; data: string }[];
   expectedCount?: number;
   model?: AIModelPreference;
+  /** استخراج توضیح برای هر سوال (پیش‌فرض خاموش؛ برای صرفه‌جویی در توکن) */
+  includeExplanations?: boolean;
 }): Promise<{
   answers: Record<number, OptionChoice>;
   explanations: Record<number, string>;
@@ -710,6 +845,12 @@ export async function extractAnswerKeyWithAI(params: {
         explanations[qNum] = String(item.explanation);
       }
     }
+  }
+
+  if (Object.keys(answers).length === 0) {
+    throw new Error(
+      'در صفحات انتخاب‌شده هیچ کلید پاسخی پیدا نشد. مطمئن شوید محدوده صفحه درست است یا از تب «از متن» / جدول دستی استفاده کنید.'
+    );
   }
 
   return { answers, explanations };

@@ -8,6 +8,7 @@ import {
   QuestionItemData,
 } from './types/exam';
 import { calculateExamScore } from './utils/scoring';
+import { getExamGroupId, getNextAttemptNumber, getAttemptSummary } from './utils/examAttempts';
 import {
   saveExamImagesToIDB,
   loadExamImagesFromIDB,
@@ -209,6 +210,8 @@ export default function App() {
 
     const newExam: ExamSession = {
       id: `exam-${Date.now()}`,
+      examGroupId: `group-${Date.now()}`,
+      attemptNumber: 1,
       title: config.title,
       subject: config.subject,
       topic: config.topic,
@@ -249,8 +252,54 @@ export default function App() {
     setReportExamId(completedSession.id);
   }, []);
 
-  const handleDeleteExam = (examId: string) => {
-    void deleteExamImagesFromIDB(examId);
+  // برگزاری مجدد آزمون: یک تلاش جدید با همان سوال‌ها، کلید و تصاویر ساخته می‌شود
+  const handleRetakeExam = useCallback(async (sourceExam: ExamSession) => {
+    const groupId = getExamGroupId(sourceExam);
+    const attemptNumber = getNextAttemptNumber(examsRef.current, sourceExam);
+    const newExamId = `exam-${Date.now()}`;
+
+    let images: Record<number, string> = {};
+    try {
+      images = await loadExamImagesFromIDB(sourceExam.id);
+    } catch {
+      images = {};
+    }
+    for (const q of sourceExam.questions) {
+      if (!images[q.questionNumber] && q.croppedImageUrl) {
+        images[q.questionNumber] = q.croppedImageUrl;
+      }
+    }
+
+    const newExam: ExamSession = {
+      ...sourceExam,
+      id: newExamId,
+      examGroupId: groupId,
+      attemptNumber,
+      status: 'in_progress',
+      createdAt: new Date().toISOString(),
+      completedAt: undefined,
+      elapsedSeconds: 0,
+      scoreSummary: undefined,
+      questions: sourceExam.questions.map((q) => ({
+        ...q,
+        selectedOption: null,
+        marker: 'none',
+        bookmarked: false,
+        timeSpentSeconds: 0,
+        croppedImageUrl: images[q.questionNumber] || q.croppedImageUrl,
+      })),
+    };
+
+    if (Object.keys(images).length > 0) {
+      void saveExamImagesToIDB(newExamId, images);
+    }
+
+    setExams((prev) => [newExam, ...prev]);
+    setReportExamId(null);
+    setRunningExamId(newExamId);
+  }, []);
+
+  const handleDeleteExam = (examId: string) => {    void deleteExamImagesFromIDB(examId);
     setExams((prev) => prev.filter((e) => e.id !== examId));
     if (runningExamId === examId) setRunningExamId(null);
     if (reportExamId === examId) setReportExamId(null);
@@ -361,6 +410,8 @@ export default function App() {
           <ReportCardView
             exam={reportExam}
             optionLabelStyle={settings.optionLabelStyle}
+            attemptSummary={getAttemptSummary(exams, reportExam)}
+            onRetakeExam={() => void handleRetakeExam(reportExam)}
             onUpdateExamWithRecalculatedScore={(updated) => {
               setExams((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
             }}
@@ -381,6 +432,7 @@ export default function App() {
               setActiveTab('create_exam');
             }}
             onOpenAnalytics={() => setActiveTab('analytics')}
+            onRetakeExam={(ex) => void handleRetakeExam(ex)}
             onSelectExam={(ex) => {
               if (ex.status === 'in_progress') {
                 setRunningExamId(ex.id);
@@ -406,6 +458,7 @@ export default function App() {
             exams={exams}
             onStartNewExam={() => setActiveTab('create_exam')}
             onOpenAnswerKeys={() => setActiveTab('answer_keys')}
+            onRetakeExam={(ex) => void handleRetakeExam(ex)}
             onSelectExam={(ex) => {
               if (ex.status === 'in_progress') {
                 setRunningExamId(ex.id);

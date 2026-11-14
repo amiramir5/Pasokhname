@@ -22,6 +22,7 @@ import {
   Sparkles,
   Download,
   Upload,
+  RotateCcw,
 } from 'lucide-react';
 import {
   ExamSession,
@@ -44,6 +45,8 @@ import {
   parseAnswerKeyFromTextLocal,
 } from '../utils/farsi';
 import { computeSubjectProgress } from '../utils/scoring';
+import { getAttemptSummary } from '../utils/examAttempts';
+import { MODEL_LABELS } from '../utils/aiModels';
 import { PWAInstallButton } from './PWAInstallButton';
 
 /* ==========================================
@@ -53,6 +56,7 @@ interface MyExamsViewProps {
   exams: ExamSession[];
   onStartNewExam: () => void;
   onOpenAnswerKeys?: () => void;
+  onRetakeExam?: (exam: ExamSession) => void;
   onSelectExam: (exam: ExamSession) => void;
   onDeleteExam: (examId: string) => void;
 }
@@ -61,6 +65,7 @@ export const MyExamsView: React.FC<MyExamsViewProps> = ({
   exams,
   onStartNewExam,
   onOpenAnswerKeys,
+  onRetakeExam,
   onSelectExam,
   onDeleteExam,
 }) => {
@@ -180,6 +185,7 @@ export const MyExamsView: React.FC<MyExamsViewProps> = ({
           <div className="divide-y divide-slate-100">
             {filtered.map((ex) => {
               const isDone = ex.status === 'completed' && ex.scoreSummary;
+              const attempt = getAttemptSummary(exams, ex);
               return (
                 <div
                   key={ex.id}
@@ -194,6 +200,11 @@ export const MyExamsView: React.FC<MyExamsViewProps> = ({
                         {ex.title} {ex.topic ? `– ${ex.topic}` : ''}
                       </span>
                       <span className="text-xs text-slate-400">· {ex.subject}</span>
+                      {attempt.total > 1 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 tabular-farsi">
+                          تلاش {toFarsiDigits(attempt.current)} از {toFarsiDigits(attempt.total)}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-500 tabular-farsi">
                       {toFarsiDigits(ex.questionCount)} سوال · مهلت:{' '}
@@ -235,6 +246,17 @@ export const MyExamsView: React.FC<MyExamsViewProps> = ({
                       </button>
                     )}
 
+                    {isDone && onRetakeExam && (
+                      <button
+                        type="button"
+                        onClick={() => onRetakeExam(ex)}
+                        className="px-3 py-1.5 rounded-lg bg-[#F3EEFF] hover:bg-[#E4DCFF] text-[#6338F9] text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        title="برگزاری مجدد آزمون"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>تکرار آزمون</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onSelectExam(ex)}
@@ -769,14 +791,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               }
               className="w-full min-h-[42px] px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs bg-white"
             >
-              <option value="auto">
-                هوشمند (شروع پرسرعت با Gemini 4 Hydrogen + ارتقا و فال‌بک با 3.5 Flash-Lite و 3.8 Flash)
-              </option>
-              <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (نسل جدید ۴، فوق‌سریع و دقیق)</option>
-              <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (بسیار سبک و ارزان)</option>
-              <option value="gemini-3.6-flash">Gemini 3.6 Flash (متعادل)</option>
-              <option value="gemini-3.8-flash">Gemini 3.8 Flash (حداکثر دقت برای صفحات پیچیده)</option>
+              <option value="auto">{MODEL_LABELS.auto}</option>
+              {(
+                [
+                  'gemini-4-hydrogen',
+                  'gemini-4-argon',
+                  'gemini-4-carbon',
+                  'gemini-3.5-flash-lite',
+                  'gemini-3.6-flash',
+                  'gemini-3.8-flash',
+                ] as AIModelPreference[]
+              ).map((modelValue) => (
+                <option key={modelValue} value={modelValue}>
+                  {MODEL_LABELS[modelValue]}
+                </option>
+              ))}
             </select>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              در حالت هوشمند، استخراج پاسخنامه با ارزان‌ترین مدل شروع می‌شود و فقط در صورت
+              نیاز به‌صورت خودکار ارتقا می‌یابد؛ تشخیص باکس سوالات با Gemini 4 Hydrogen انجام می‌شود.
+            </p>
           </div>
         </div>
 

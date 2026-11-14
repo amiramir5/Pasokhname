@@ -45,6 +45,10 @@ export interface ExamScoreSummary {
 
 export interface ExamSession {
   id: string;
+  /** شناسه گروه آزمون؛ همه تلاش‌های تکراری یک آزمون این شناسه را به اشتراک می‌گذارند */
+  examGroupId?: string;
+  /** شماره تلاش (۱ = اولین برگزاری، ۲ = اولین تکرار، ...) */
+  attemptNumber?: number;
   title: string;
   subject: string;
   topic: string;
@@ -74,6 +78,8 @@ export interface SavedAnswerKeyTemplate {
 export type AIModelPreference =
   | 'auto'
   | 'gemini-4-hydrogen'
+  | 'gemini-4-argon'
+  | 'gemini-4-carbon'
   | 'gemini-3.5-flash-lite'
   | 'gemini-3.6-flash'
   | 'gemini-3.8-flash';

@@ -11,10 +11,14 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// آخرین نام‌گذاری رسمی مدل‌های Gemini (نسل ۴ + شاخه پایدار ۳)
 const FAST_MODEL = 'gemini-4-hydrogen';
-const STRONG_MODEL = 'gemini-3.8-flash';
+const STRONG_MODEL = 'gemini-4-argon';
+const CHEAPEST_MODEL = 'gemini-3.5-flash-lite';
 const ALLOWED_MODELS = new Set([
   'gemini-4-hydrogen',
+  'gemini-4-argon',
+  'gemini-4-carbon',
   'gemini-3.5-flash-lite',
   'gemini-3.6-flash',
   'gemini-3.8-flash',
@@ -287,7 +291,7 @@ async function startServer() {
     res.json({
       hasServerKey: isUsableKey(process.env.GEMINI_API_KEY),
       defaultModel: FAST_MODEL,
-      supportedModels: ['auto', FAST_MODEL, 'gemini-3.5-flash-lite', 'gemini-3.6-flash', STRONG_MODEL],
+      supportedModels: ['auto', FAST_MODEL, STRONG_MODEL, CHEAPEST_MODEL, 'gemini-3.6-flash', 'gemini-3.8-flash'],
     });
   });
 
@@ -389,12 +393,14 @@ async function startServer() {
   // 1. Endpoint: Extract Answer Key from Text, Image(s), or PDF Page Images
   app.post('/api/ai/extract-answers', async (req, res) => {
     try {
-      const { textInput, imagesBase64, expectedCount, model: requestedModel } = req.body as {
-        textInput?: string;
-        imagesBase64?: { mimeType: string; data: string }[];
-        expectedCount?: number;
-        model?: string;
-      };
+      const { textInput, imagesBase64, expectedCount, model: requestedModel, includeExplanations } =
+        req.body as {
+          textInput?: string;
+          imagesBase64?: { mimeType: string; data: string }[];
+          expectedCount?: number;
+          model?: string;
+          includeExplanations?: boolean;
+        };
 
       const apiKey = resolveApiKey(req);
       if (!apiKey) {
@@ -422,24 +428,53 @@ async function startServer() {
         }
       }
 
-      const countHint = expectedCount ? `تعداد کل سوالات حدود ${expectedCount} سوال است.` : '';
-      const promptText = `شما یک دستیار تخصصی استخراج کلید پاسخنامه آزمون‌های چهارگزینه‌ای کنکور و مدارس ایران هستید.
+      const wantExplanations = Boolean(includeExplanations);
+      const countHint = expectedCount
+        ? `تعداد کل سوالات این درس حدود ${expectedCount} سوال است.`
+        : '';
+      const promptText = `تو یک استخراج‌کنندهٔ دقیق «کلید پاسخنامه» هستی و فقط دو چیز را برمی‌گردانی: شماره سوال و شماره گزینه صحیح (۱ تا ۴).
+
 ${countHint}
-از محتوای تصویر یا متن زیر، شماره هر سوال و گزینه صحیح آن (عددی بین 1 تا 4) را استخراج کنید.
-توجه:
-- اگر گزینه‌ها با حروف الف، ب، ج، د یا A, B, C, D مشخص شده‌اند: الف=1، ب=2، ج=3، د=4.
-- اعداد فارسی (۱، ۲، ۳، ۴) را به عدد صحیح 1 تا 4 تبدیل کنید.
-- اگر توضیح کوتاهی برای پاسخ وجود دارد در فیلد explanation بنویسید وگرنه خالی بگذارید.
-${textInput ? `\nمتن ورودی کاربر:\n${textInput}` : ''}`;
+
+قواعد قطعی (حتی اگر پاسخنامه تشریحی و طولانی باشد):
+1) پاسخنامه ممکن است برای هر سوال تا دو صفحه توضیح، استدلال یا محاسبه داشته باشد. تو نباید متن تشریحی را بخوانی یا خلاصه کنی؛ فقط همان جمله/نشانه‌ای را پیدا کن که گزینه صحیح را اعلام می‌کند: «پاسخ: گزینه ۳»، «پاسخ صحیح: ب»، «گزینه درست: ۲»، تیک کنار یک گزینه، یا عبارت «درست است».
+2) برای هر سوال فقط یک رکورد با questionNumber و correctOption خروجی بده.
+3) حروف الف=۱، ب=۲، ج=۳، د=۴ (و A=1, B=2, C=3, D=4) و اعداد فارسی/عربی را به عدد ۱ تا ۴ تبدیل کن.
+4) اگر گزینه صحیح یک سوال قطعی نیست یا حذف/چندپاسخه است، آن سوال را نادیده بگیر و حدس نزن.
+5) هیچ توضیح، متن اضافه، مقدمه یا نتیجه‌گیری برنگردان.
+${wantExplanations ? '6) فقط برای هر سوال یک جمله خیلی کوتاه (حداکثر ۱۵ کلمه) به‌عنوان دلیل در فیلد explanation بنویس.' : '6) فیلد explanation را هرگز برنگردان.'}
+${textInput ? `\nمتن پاسخنامه/کلید:\n${textInput}` : ''}`;
 
       parts.push({ text: promptText });
 
-      const isAuto = !requestedModel || requestedModel === 'auto';
+      const isAuto = !requestedModel || requestedModel === 'auto' || !ALLOWED_MODELS.has(requestedModel);
       const primaryModel = isAuto
-        ? FAST_MODEL
+        ? CHEAPEST_MODEL
         : ALLOWED_MODELS.has(requestedModel)
         ? requestedModel
-        : FAST_MODEL;
+        : CHEAPEST_MODEL;
+
+      const maxOutputTokens = Math.min(
+        2048,
+        Math.max(wantExplanations ? 600 : 256, (expectedCount || 40) * (wantExplanations ? 42 : 16))
+      );
+
+      const answerItemProperties: Record<string, unknown> = {
+        questionNumber: {
+          type: Type.INTEGER,
+          description: 'شماره سوال (از 1 به بالا)',
+        },
+        correctOption: {
+          type: Type.INTEGER,
+          description: 'گزینه صحیح عددی بین 1 تا 4',
+        },
+      };
+      if (wantExplanations) {
+        answerItemProperties.explanation = {
+          type: Type.STRING,
+          description: 'دلیل کوتاه صحیح بودن گزینه (حداکثر یک جمله)',
+        };
+      }
 
       const callExtract = async (modelName: string, level: ThinkingLevel) => {
         const response = await ai.models.generateContent({
@@ -447,6 +482,7 @@ ${textInput ? `\nمتن ورودی کاربر:\n${textInput}` : ''}`;
           contents: { parts },
           config: {
             thinkingConfig: { thinkingLevel: level },
+            maxOutputTokens,
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -456,21 +492,10 @@ ${textInput ? `\nمتن ورودی کاربر:\n${textInput}` : ''}`;
                   description: 'لیست کلید سوالات استخراج شده',
                   items: {
                     type: Type.OBJECT,
-                    properties: {
-                      questionNumber: {
-                        type: Type.INTEGER,
-                        description: 'شماره سوال (از 1 به بالا)',
-                      },
-                      correctOption: {
-                        type: Type.INTEGER,
-                        description: 'گزینه صحیح عددی بین 1 تا 4',
-                      },
-                      explanation: {
-                        type: Type.STRING,
-                        description: 'توضیح کوتاه یا نکته کلیدی پاسخ در صورت وجود',
-                      },
-                    },
-                    required: ['questionNumber', 'correctOption'],
+                    properties: answerItemProperties,
+                    required: wantExplanations
+                      ? ['questionNumber', 'correctOption', 'explanation']
+                      : ['questionNumber', 'correctOption'],
                   },
                 },
               },
@@ -483,21 +508,47 @@ ${textInput ? `\nمتن ورودی کاربر:\n${textInput}` : ''}`;
         return Array.isArray(parsed.answers) ? parsed.answers : [];
       };
 
+      const chain = Array.from(
+        new Set(
+          isAuto
+            ? [CHEAPEST_MODEL, FAST_MODEL, STRONG_MODEL]
+            : [primaryModel, FAST_MODEL, STRONG_MODEL]
+        )
+      );
+
       let modelUsed = primaryModel;
-      let answers = [];
-      try {
-        answers = await callExtract(primaryModel, ThinkingLevel.LOW);
-        if (isAuto && answers.length === 0) {
-          modelUsed = STRONG_MODEL;
-          answers = await callExtract(STRONG_MODEL, ThinkingLevel.MEDIUM);
+      let answers: Array<Record<string, unknown>> = [];
+      let lastErr: unknown;
+
+      for (let idx = 0; idx < chain.length; idx++) {
+        const candidateModel = chain[idx];
+        const level =
+          candidateModel === STRONG_MODEL || candidateModel === FAST_MODEL
+            ? ThinkingLevel.MEDIUM
+            : ThinkingLevel.LOW;
+        try {
+          answers = await withTransientRetry(() => callExtract(candidateModel, level), 1);
+          if (answers.length > 0) {
+            modelUsed = candidateModel;
+            break;
+          }
+        } catch (err) {
+          lastErr = err;
+          if (idx === chain.length - 1) {
+            throw err;
+          }
         }
-      } catch (primaryErr) {
-        if (isAuto && primaryModel !== STRONG_MODEL) {
-          modelUsed = STRONG_MODEL;
-          answers = await callExtract(STRONG_MODEL, ThinkingLevel.MEDIUM);
-        } else {
-          throw primaryErr;
-        }
+      }
+
+      if (answers.length === 0) {
+        res.status(422).json({
+          success: false,
+          modelUsed,
+          error: lastErr
+            ? formatGeminiError(lastErr)
+            : 'در صفحات انتخاب‌شده هیچ کلید پاسخی پیدا نشد. محدوده صفحه را بررسی کنید یا از تب «از متن» / جدول دستی استفاده کنید.',
+        });
+        return;
       }
 
       res.json({
