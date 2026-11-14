@@ -451,9 +451,10 @@ ${textInput ? `\nمتن پاسخنامه/کلید:\n${textInput}` : ''}`;
         ? requestedModel
         : CHEAPEST_MODEL;
 
+      // توکن‌های فکر کردن مدل هم از این سقف کم می‌شوند؛ سقف کم باعث ناتمام ماندن کلید می‌شد.
       const maxOutputTokens = Math.min(
-        2048,
-        Math.max(wantExplanations ? 600 : 256, (expectedCount || 40) * (wantExplanations ? 42 : 16))
+        8192,
+        Math.max(1024, (expectedCount || 40) * (wantExplanations ? 70 : 40))
       );
 
       const answerItemProperties: Record<string, unknown> = {

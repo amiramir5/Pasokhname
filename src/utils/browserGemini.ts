@@ -341,9 +341,11 @@ ${params.textInput ? `\nمتن پاسخنامه/کلید:\n${params.textInput}` 
     !params.model || params.model === 'auto' || !ALLOWED_MODEL_SET.has(params.model);
   const primaryModel = resolveAnswerKeyModel(params.model);
 
+  // توکن‌های «فکر کردن» مدل هم از همین سقف کم می‌شوند؛ سقف کم باعث می‌شد مدل
+  // فقط چند سوال اول را برگرداند و بقیه ناتمام بماند. پس سخاوتمندانه حساب می‌کنیم.
   const maxOutputTokens = Math.min(
-    2048,
-    Math.max(includeExplanations ? 600 : 256, (params.expectedCount || 40) * (includeExplanations ? 42 : 16))
+    8192,
+    Math.max(1024, (params.expectedCount || 40) * (includeExplanations ? 70 : 40))
   );
 
   const answerItemProperties: Record<string, unknown> = {
@@ -354,10 +356,25 @@ ${params.textInput ? `\nمتن پاسخنامه/کلید:\n${params.textInput}` 
     answerItemProperties.explanation = { type: Type.STRING };
   }
 
-  const callExtract = async (modelName: string, level: ThinkingLevel) => {
+  const callExtract = async (
+    modelName: string,
+    level: ThinkingLevel,
+    onlyQuestions?: number[]
+  ) => {
+    const requestParts =
+      onlyQuestions && onlyQuestions.length > 0
+        ? [
+            ...parts,
+            {
+              text: `\nفقط شماره سوال‌های زیر را که هنوز استخراج نشده‌اند پیدا کن و خروجی بده: ${onlyQuestions.join(
+                '، '
+              )}. برای بقیه سوال‌ها هیچ رکوردی برنگردان.`,
+            },
+          ]
+        : parts;
     const response = await ai.models.generateContent({
       model: modelName,
-      contents: { parts },
+      contents: { parts: requestParts },
       config: {
         thinkingConfig: { thinkingLevel: level },
         maxOutputTokens,
@@ -409,12 +426,49 @@ ${params.textInput ? `\nمتن پاسخنامه/کلید:\n${params.textInput}` 
 
   const answers: Record<number, OptionChoice> = {};
   const explanations: Record<number, string> = {};
-  for (const item of rawAnswers) {
-    const qNum = Number(item.questionNumber);
-    const opt = Number(item.correctOption);
-    if (qNum >= 1 && (opt === 1 || opt === 2 || opt === 3 || opt === 4)) {
-      answers[qNum] = opt as OptionChoice;
-      if (includeExplanations && item.explanation) explanations[qNum] = String(item.explanation);
+  const mergeAnswers = (
+    items: Array<{ questionNumber?: number; correctOption?: number; explanation?: string }>
+  ) => {
+    for (const item of items) {
+      const qNum = Number(item.questionNumber);
+      const opt = Number(item.correctOption);
+      if (qNum >= 1 && (opt === 1 || opt === 2 || opt === 3 || opt === 4)) {
+        answers[qNum] = opt as OptionChoice;
+        if (includeExplanations && item.explanation) explanations[qNum] = String(item.explanation);
+      }
+    }
+  };
+  mergeAnswers(rawAnswers);
+
+  // مرحله دوم: اگر تعداد کل سوالات مشخص است ولی هنوز چند شماره پیدا نشده،
+  // دقیقاً همان شماره‌ها را با مدل‌های قوی‌تر دوباره جست‌وجو می‌کنیم.
+  const expected = params.expectedCount || 0;
+  if (expected > 0) {
+    for (let round = 0; round < 2; round++) {
+      const missing: number[] = [];
+      for (let n = 1; n <= expected; n++) {
+        if (!answers[n]) missing.push(n);
+      }
+      if (missing.length === 0) break;
+
+      let progressed = false;
+      for (const modelName of Array.from(new Set([FAST_MODEL, STRONG_MODEL]))) {
+        const stillMissing = missing.filter((n) => !answers[n]);
+        if (stillMissing.length === 0) break;
+        try {
+          const extra = await withTransientRetry(
+            () => callExtract(modelName, ThinkingLevel.MEDIUM, stillMissing.slice(0, 40)),
+            1
+          );
+          if (extra.length > 0) {
+            mergeAnswers(extra);
+            progressed = true;
+          }
+        } catch {
+          // اگر مدل کمکی پاسخ نداد، با همان یافته‌های قبلی ادامه می‌دهیم
+        }
+      }
+      if (!progressed) break;
     }
   }
 

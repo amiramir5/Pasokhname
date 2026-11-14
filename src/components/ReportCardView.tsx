@@ -27,6 +27,7 @@ import {
   loadImageFileToRenderedPage,
   extractAnswerKeyWithAI,
 } from '../utils/pdfAndVision';
+import { PdfPagePicker } from './PdfPagePicker';
 
 interface ReportCardViewProps {
   exam: ExamSession;
@@ -53,6 +54,8 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
   const [keyMessage, setKeyMessage] = useState<string | null>(null);
   const [previewQuestionIndex, setPreviewQuestionIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [keyPdfFile, setKeyPdfFile] = useState<File | null>(null);
+  const [keySelectedPages, setKeySelectedPages] = useState<number[]>([]);
 
   const summary = exam.scoreSummary || calculateExamScore(exam.questions);
   const keyedQuestionsCount = exam.questions.filter((q) => q.correctOption !== null).length;
@@ -93,22 +96,10 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
     setKeyMessage(`کلید ${toFarsiDigits(count)} سوال اعمال شد و کارنامه به‌روز گردید.`);
   };
 
-  const handleExtractKeyFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const runExtraction = async (imagesPayload: { mimeType: string; data: string }[]) => {
     setIsExtractingAI(true);
     setKeyMessage('در حال استخراج کلید از فایل با هوش مصنوعی...');
-
     try {
-      let imagesPayload: { mimeType: string; data: string }[] = [];
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        const pages = await renderPdfFileToImages(file, 8, 1.45);
-        imagesPayload = pages.map((p) => ({ mimeType: 'image/jpeg', data: p.dataUrl }));
-      } else {
-        const page = await loadImageFileToRenderedPage(file, 1);
-        imagesPayload = [{ mimeType: 'image/jpeg', data: page.dataUrl }];
-      }
-
       const res = await extractAnswerKeyWithAI({
         imagesBase64: imagesPayload,
         expectedCount: exam.questionCount,
@@ -125,14 +116,55 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
         questions: updatedQuestions,
         scoreSummary: newScore,
       });
+      const found = Object.keys(res.answers).length;
+      const missing = exam.questionCount - found;
       setKeyMessage(
-        `کلید ${toFarsiDigits(Object.keys(res.answers).length)} سوال با هوش مصنوعی استخراج و کارنامه تصحیح شد.`
+        `کلید ${toFarsiDigits(found)} سوال با هوش مصنوعی استخراج و کارنامه تصحیح شد.${
+          missing > 0
+            ? ` ${toFarsiDigits(missing)} سوال پیدا نشد؛ می‌توانید صفحات دیگری را انتخاب کنید یا دستی بزنید.`
+            : ''
+        }`
       );
     } catch (err: unknown) {
       setKeyMessage(err instanceof Error ? err.message : 'خطا در استخراج فایل پاسخنامه');
     } finally {
       setIsExtractingAI(false);
+    }
+  };
+
+  const handleExtractKeyFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // برای PDF اول پیش‌نمایش صفحات را نشان می‌دهیم تا فقط صفحات پاسخنامه انتخاب شوند.
+    if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      setKeyPdfFile(file);
+      setKeySelectedPages([]);
+      setKeyMessage('صفحات مربوط به کلید پاسخنامه را از پیش‌نمایش پایین انتخاب کنید.');
       e.target.value = '';
+      return;
+    }
+
+    try {
+      const page = await loadImageFileToRenderedPage(file, 1);
+      await runExtraction([{ mimeType: 'image/jpeg', data: page.dataUrl }]);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleExtractFromSelectedPages = async () => {
+    if (!keyPdfFile || keySelectedPages.length === 0) return;
+    setIsExtractingAI(true);
+    setKeyMessage('در حال آماده‌سازی صفحات انتخاب‌شده...');
+    try {
+      const pages = await renderPdfFileToImages(keyPdfFile, keySelectedPages.length, 1.6, keySelectedPages);
+      await runExtraction(
+        pages.map((p) => ({ mimeType: 'image/jpeg', data: p.dataUrl }))
+      );
+    } catch (err: unknown) {
+      setIsExtractingAI(false);
+      setKeyMessage(err instanceof Error ? err.message : 'خطا در پردازش صفحات انتخاب‌شده');
     }
   };
 
@@ -251,6 +283,43 @@ export const ReportCardView: React.FC<ReportCardViewProps> = ({
           {keyMessage && (
             <div className="p-3 rounded-xl bg-indigo-50 text-indigo-900 text-xs font-medium">
               {keyMessage}
+            </div>
+          )}
+
+          {keyPdfFile && (
+            <div className="space-y-3 p-3 rounded-xl border border-slate-200 bg-slate-50/60">
+              <PdfPagePicker
+                file={keyPdfFile}
+                hint="صفحاتی که کلید پاسخنامه در آن‌هاست را انتخاب کنید (مثلاً فقط صفحه کلید تشریحی)."
+                onSelectionChange={setKeySelectedPages}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isExtractingAI || keySelectedPages.length === 0}
+                  onClick={handleExtractFromSelectedPages}
+                  className="px-4 py-2 rounded-xl bg-[#6338F9] hover:bg-[#5228E8] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isExtractingAI ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
+                  <span>استخراج کلید از صفحات انتخاب‌شده</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isExtractingAI}
+                  onClick={() => {
+                    setKeyPdfFile(null);
+                    setKeySelectedPages([]);
+                    setKeyMessage(null);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer"
+                >
+                  بستن انتخاب صفحات
+                </button>
+              </div>
             </div>
           )}
 
